@@ -1,0 +1,408 @@
+import { useState, useRef } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import api from '../lib/api';
+import type {
+  TaxFormData,
+  DocType,
+  CategoryTotals,
+  ImportAuditEntry,
+} from '../types';
+
+interface Props {
+  /**
+   * Called when extraction yields a partial form patch.
+   * @param data       Patch to merge into the form
+   * @param mode       'replace' = set fields outright; 'add' = accumulate (sum)
+   */
+  onExtracted: (data: Partial<TaxFormData>, mode: 'replace' | 'add') => void;
+  onAuditEntry?: (entry: ImportAuditEntry) => void;
+}
+
+interface UploadStatus {
+  fileName: string;
+  status: 'uploading' | 'extracting' | 'success' | 'error';
+  message?: string;
+}
+
+const DOC_TYPE_LABELS: Record<DocType, string> = {
+  auto: 'Auto-detect (recommended)',
+  'profit-loss': 'Profit & Loss Statement',
+  'bank-statement': 'Business Checking Statement',
+  'line-of-credit': 'Line of Credit Statement',
+  'payroll-summary': 'Payroll Summary',
+  'royalty-statement': 'Foot Solutions Royalty Report',
+  'sales-tax-return': 'Texas Sales Tax Return',
+  'fixed-assets': 'Fixed Asset / Depreciation Schedule',
+  insurance: 'Insurance Policy / Quote',
+  lease: 'Commercial Lease Agreement',
+  general: 'Other / General',
+};
+
+/** Doc types that accumulate (sum) into the form on each upload — multi-month. */
+const ACCUMULATE_DOC_TYPES: DocType[] = [
+  'bank-statement',
+  'line-of-credit',
+  'insurance',
+];
+
+const ACCEPTED_TYPES = '.csv,.pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg';
+
+function inferContentTypeFromName(fileName: string): string {
+  const ext = fileName.toLowerCase().split('.').pop() ?? '';
+  switch (ext) {
+    case 'pdf':
+      return 'application/pdf';
+    case 'csv':
+      return 'text/csv';
+    case 'xlsx':
+      return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    case 'xls':
+      return 'application/vnd.ms-excel';
+    case 'docx':
+      return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    case 'doc':
+      return 'application/msword';
+    case 'png':
+      return 'image/png';
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+export default function DocumentUpload({ onExtracted, onAuditEntry }: Props) {
+  const queryClient = useQueryClient();
+  const [docType, setDocType] = useState<DocType>('auto');
+  const [uploads, setUploads] = useState<UploadStatus[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function pushStatus(s: UploadStatus) {
+    setUploads((prev) => [...prev, s]);
+  }
+
+  function updateStatus(fileName: string, patch: Partial<UploadStatus>) {
+    setUploads((prev) =>
+      prev.map((u) => (u.fileName === fileName ? { ...u, ...patch } : u))
+    );
+  }
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || files.length === 0) return;
+
+    for (const file of Array.from(files)) {
+      pushStatus({ fileName: file.name, status: 'uploading' });
+
+      try {
+        // Browser sometimes reports an empty type for xlsx — fall back to extension
+        const contentType =
+          file.type && file.type !== ''
+            ? file.type
+            : inferContentTypeFromName(file.name);
+
+        // 1. Get pre-signed URL
+        const urlResp = await api.post<{
+          uploadUrl: string;
+          objectKey: string;
+        }>('/documents/upload-url', {
+          fileName: file.name,
+          contentType,
+          docType,
+        });
+
+        // 2. Upload file directly to S3.
+        // Don't set Content-Type — the pre-signed URL doesn't sign it,
+        // and a mismatch causes 403 SignatureDoesNotMatch.
+        const putResp = await fetch(urlResp.data.uploadUrl, {
+          method: 'PUT',
+          body: file,
+        });
+
+        if (!putResp.ok) {
+          throw new Error(`S3 upload failed: ${putResp.status}`);
+        }
+
+        // 3. Trigger extraction
+        updateStatus(file.name, { status: 'extracting' });
+
+        const extractResp = await api.post<{
+          extracted: Record<string, unknown>;
+          docType: DocType;
+          autoClassifyResult?: {
+            classifiedAs: string;
+            confidence: 'high' | 'medium' | 'low';
+            rationale: string;
+            bestGuessLabel?: string;
+          } | null;
+        }>('/documents/extract', {
+          objectKey: urlResp.data.objectKey,
+          docType,
+          fileName: file.name,
+        });
+
+        // The server may have re-classified the doc when docType was 'auto'.
+        // Use the resolved docType for all downstream branching.
+        const resolvedDocType: DocType = extractResp.data.docType;
+        const classifyInfo = extractResp.data.autoClassifyResult ?? null;
+
+        // 4. Map extracted fields onto the form
+        const isAccumulating = ACCUMULATE_DOC_TYPES.includes(resolvedDocType);
+        const isStatement =
+          resolvedDocType === 'bank-statement' || resolvedDocType === 'line-of-credit';
+
+        let appliedFieldCount = 0;
+        // Build a status suffix that surfaces the auto-classify result to the user
+        const classifySuffix = classifyInfo
+          ? resolvedDocType === 'general'
+            ? ` (auto: Other — possibly ${classifyInfo.bestGuessLabel ?? 'unknown'})`
+            : ` (auto: ${DOC_TYPE_LABELS[resolvedDocType]})`
+          : '';
+
+        if (isStatement) {
+          // Bank statement / LOC — categoryTotals shape
+          const ext = extractResp.data.extracted as {
+            categoryTotals?: Partial<CategoryTotals>;
+            flaggedTransactions?: Array<{
+              date: string;
+              description: string;
+              amount: number;
+              reason: string;
+            }>;
+            bankName?: string;
+            periodStart?: string;
+            periodEnd?: string;
+          };
+
+          const totals = ext.categoryTotals ?? {};
+          const patch: Partial<TaxFormData> = {};
+          for (const [k, v] of Object.entries(totals)) {
+            if (typeof v === 'number' && v > 0) {
+              // @ts-expect-error generic mapping
+              patch[k] = v;
+              appliedFieldCount += 1;
+            }
+          }
+
+          if (appliedFieldCount > 0) {
+            onExtracted(patch, 'add');
+            const sectionToggles: Partial<TaxFormData> = {};
+            if (patch.totalEmployeeWages || patch.employerHealthInsurance) {
+              sectionToggles.hasEmployees = true;
+            }
+            if (patch.total1099Payments) {
+              sectionToggles.hasContractors = true;
+            }
+            if (patch.totalEquipmentCost) {
+              sectionToggles.hasEquipment = true;
+            }
+            if (patch.loanInterestPaid || patch.loanPrincipalPaid) {
+              sectionToggles.hasBusinessLoans = true;
+            }
+            if (Object.keys(sectionToggles).length > 0) {
+              onExtracted(sectionToggles, 'replace');
+            }
+          }
+
+          if (onAuditEntry) {
+            onAuditEntry({
+              id: `${urlResp.data.objectKey}-${Date.now()}`,
+              fileName: file.name,
+              docType: resolvedDocType,
+              uploadedAt: new Date().toISOString(),
+              appliedTotals: patch as Partial<CategoryTotals>,
+              flagged: ext.flaggedTransactions ?? [],
+              ...(ext.bankName && { bankName: ext.bankName }),
+              ...(ext.periodStart && { periodStart: ext.periodStart }),
+              ...(ext.periodEnd && { periodEnd: ext.periodEnd }),
+            });
+          }
+
+          const flaggedCount = ext.flaggedTransactions?.length ?? 0;
+          updateStatus(file.name, {
+            status: 'success',
+            message: `${appliedFieldCount} categor${appliedFieldCount === 1 ? 'y' : 'ies'} populated${
+              flaggedCount > 0 ? ` · ${flaggedCount} flagged` : ''
+            }${classifySuffix}`,
+          });
+        } else {
+          // Single-figure docs (P&L, insurance, lease, royalty, sales tax, etc.)
+          const mapped = mapExtractedToForm(extractResp.data.extracted);
+          appliedFieldCount = Object.keys(mapped).length;
+          if (appliedFieldCount > 0) {
+            onExtracted(mapped, isAccumulating ? 'add' : 'replace');
+          }
+          updateStatus(file.name, {
+            status: 'success',
+            message: `${
+              appliedFieldCount > 0
+                ? `${appliedFieldCount} field${appliedFieldCount === 1 ? '' : 's'} ${isAccumulating ? 'added' : 'populated'}`
+                : 'No fields extracted'
+            }${classifySuffix}`,
+          });
+        }
+
+        // Refresh sidebar after every successful extract
+        void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        updateStatus(file.name, { status: 'error', message });
+      }
+    }
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    void handleFiles(e.dataTransfer.files);
+  }
+
+  return (
+    <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 bg-slate-50">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h3 className="text-base font-semibold text-slate-900 mb-1">
+            Upload Documents (optional)
+          </h3>
+          <p className="text-sm text-slate-500">
+            Upload CSV, PDF, XLSX, or DOCX files to auto-fill the form below. P&L statements,
+            bank statements, royalty reports, sales tax returns, insurance policies, and lease
+            agreements all work — just pick the right document type.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+        <div className="md:col-span-1">
+          <label className="block text-xs font-medium text-slate-700 mb-1">
+            Document Type
+          </label>
+          <select
+            value={docType}
+            onChange={(e) => setDocType(e.target.value as DocType)}
+            className="w-full rounded-md border border-slate-300 py-2 px-3 text-sm bg-white"
+          >
+            {(Object.keys(DOC_TYPE_LABELS) as DocType[]).map((k) => (
+              <option key={k} value={k}>
+                {DOC_TYPE_LABELS[k]}
+              </option>
+            ))}
+          </select>
+          {docType === 'auto' && (
+            <p className="text-xs text-blue-700 mt-1.5">
+              💡 The AI will read each file and pick the right category automatically.
+            </p>
+          )}
+          {ACCUMULATE_DOC_TYPES.includes(docType) && (
+            <p className="text-xs text-blue-700 mt-1.5">
+              💡 Multiple uploads of this type will <strong>add together</strong> — drop in all 12 monthly statements at once.
+            </p>
+          )}
+        </div>
+
+        <div
+          className={`md:col-span-2 rounded-md border-2 border-dashed p-4 text-center cursor-pointer transition ${
+            isDragging
+              ? 'border-blue-500 bg-blue-50'
+              : 'border-slate-300 bg-white hover:bg-slate-50'
+          }`}
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setIsDragging(true);
+          }}
+          onDragLeave={() => setIsDragging(false)}
+          onDrop={handleDrop}
+        >
+          <input
+            ref={inputRef}
+            type="file"
+            accept={ACCEPTED_TYPES}
+            multiple
+            onChange={(e) => handleFiles(e.target.files)}
+            className="hidden"
+          />
+          <p className="text-sm text-slate-600">
+            <span className="font-medium text-blue-600">Click to upload</span> or drag and drop
+          </p>
+          <p className="text-xs text-slate-500 mt-1">CSV, PDF, XLSX, DOCX, PNG, JPEG</p>
+        </div>
+      </div>
+
+      {uploads.length > 0 && (
+        <div className="space-y-1.5">
+          {uploads.map((u, i) => (
+            <div
+              key={`${u.fileName}-${i}`}
+              className="flex items-center justify-between text-sm bg-white rounded px-3 py-2 border border-slate-200"
+            >
+              <span className="truncate text-slate-700">{u.fileName}</span>
+              <span
+                className={`text-xs font-medium ${
+                  u.status === 'success'
+                    ? 'text-green-700'
+                    : u.status === 'error'
+                      ? 'text-red-700'
+                      : 'text-slate-500'
+                }`}
+              >
+                {u.status === 'uploading' && 'Uploading…'}
+                {u.status === 'extracting' && 'Extracting…'}
+                {u.status === 'success' && `✓ ${u.message ?? 'Done'}`}
+                {u.status === 'error' && `Error: ${u.message ?? 'unknown'}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Map extracted JSON keys from Bedrock onto TaxFormData fields
+function mapExtractedToForm(extracted: Record<string, unknown>): Partial<TaxFormData> {
+  const out: Partial<TaxFormData> = {};
+  const numericFields: Array<keyof TaxFormData> = [
+    'totalRevenue',
+    'cogs',
+    'totalOperatingExpenses',
+    'rentLeasePayments',
+    'utilities',
+    'businessInsurancePremiums',
+    'professionalFees',
+    'marketingAdvertising',
+    'officeSupplies',
+    'bankFees',
+    'softwareSubscriptions',
+    'totalEmployeeWages',
+    'employerPayrollTaxes',
+    'retirementPlanContributions',
+    'employerHealthInsurance',
+    'total1099Payments',
+    'vehicleMilesDriven',
+    'actualVehicleExpenses',
+    'homeOfficeSqFt',
+    'totalHomeSqFt',
+    'totalEquipmentCost',
+    'royaltyFees',
+    'adFundContributions',
+    'initialFranchiseFeePaidThisYear',
+    'loanInterestPaid',
+    'loanPrincipalPaid',
+    'salesTaxCollected',
+    'salesTaxRemitted',
+    'beginningInventory',
+    'endingInventory',
+    'employeeCount',
+  ];
+
+  for (const field of numericFields) {
+    const v = extracted[field as string];
+    if (typeof v === 'number' && !isNaN(v) && v >= 0) {
+      // @ts-expect-error generic assignment
+      out[field] = v;
+    }
+  }
+  return out;
+}

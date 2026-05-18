@@ -1,0 +1,25 @@
+{
+  "name": "foot-solutions-lambda",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.137",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.600.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-lambda": "3.1048.0",
+    "@aws-sdk/client-s3": "3.1048.0",
+    "@aws-sdk/client-secrets-manager": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@aws-sdk/s3-request-presigner": "3.1048.0",
+    "@types/uuid": "^9.0.0",
+    "uuid": "^9.0.0"
+  }
+}

@@ -1,0 +1,1497 @@
+{
+  "/FootSolutionsStack": [
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    },
+    {
+      "type": "aws:cdk:stack-tags",
+      "data": [
+        {
+          "key": "CostCenter",
+          "value": "foot-solutions-flowermound"
+        },
+        {
+          "key": "Environment",
+          "value": "production"
+        },
+        {
+          "key": "ManagedBy",
+          "value": "cdk"
+        },
+        {
+          "key": "Owner",
+          "value": "flowermound@footsolutions.com"
+        },
+        {
+          "key": "Project",
+          "value": "foot-solutions-platform"
+        }
+      ]
+    }
+  ],
+  "/FootSolutionsStack/AppTable": [
+    {
+      "type": "aws:cdk:hasPhysicalName",
+      "data": {
+        "Ref": "AppTable815C50BC"
+      }
+    }
+  ],
+  "/FootSolutionsStack/ApiUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "ApiUrl"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:648:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/UserPoolId": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "UserPoolId"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:654:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/UserPoolClientId": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "UserPoolClientId"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:660:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CloudFrontUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CloudFrontUrl"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:666:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/StaticBucketName": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "StaticBucketName"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:672:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DistributionId": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DistributionId"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:678:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CognitoHostedUiUrl": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CognitoHostedUiUrl"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:684:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocsBucketName": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocsBucketName"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:690:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/BootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "BootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, node internals, @cspotcode/source-map-support...",
+        "(no user code in 9007199254740991 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CheckBootstrapVersion": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CheckBootstrapVersion"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, node internals, @cspotcode/source-map-support...",
+        "(no user code in 9007199254740991 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/FootSolutionsStack/UserPool/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "UserPool6BA7E5F2"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new UserPool2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:29:22)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/StaticBucket/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "StaticBucket92253581"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Bucket2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:51:26)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/OAC/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "OAC5B452445"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new S3OriginAccessControl2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:59:17)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/Distribution/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "Distribution830FAC52"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Distribution2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:63:26)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/AppTable/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "AppTable815C50BC"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Table2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:175:19)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocsBucket/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocsBucketECEA003F"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Bucket2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:186:24)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/TaxHandler/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TaxHandler85466C28"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:217:19)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CredentialHandler/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CredentialHandlerD61EA449"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:262:20)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocumentHandler/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocumentHandlerC2057DD1"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:308:19)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandHandler/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandHandlerB43C85E0"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:362:25)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandSyncHandler/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandSyncHandler39B5AC81"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:405:29)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandSyncSchedule/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandSyncScheduleE2B5F638"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Rule2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:448:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandSyncSchedule/AllowEventRuleFootSolutionsStackHeartlandSyncHandler1B3C9404": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandSyncScheduleAllowEventRuleFootSolutionsStackHeartlandSyncHandler1B3C9404A0266723"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Rule2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:448:5)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiF5A9A8A7"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new HttpApi2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:455:21)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CDKMetadata/Default": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CDKMetadata"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...aws-cdk-lib, node internals, @cspotcode/source-map-support...",
+        "(no user code in 9007199254740991 frames, use --stack-trace-limit to capture more)"
+      ]
+    }
+  ],
+  "/FootSolutionsStack/UserPool/HostedUIDomain/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "UserPoolHostedUIDomain7F20EF9C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.addDomain in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:45:14)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/UserPool/WebClient/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "UserPoolWebClient4C9370B0"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.addClient in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:159:37)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/StaticBucket/Policy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "StaticBucketPolicy4D0F6D8E"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Bucket2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:51:26)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocsBucket/Policy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocsBucketPolicy7BCF1FB7"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new Bucket2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:186:24)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/TaxHandler/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TaxHandlerServiceRole2763F4A9"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:217:19)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CredentialHandler/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CredentialHandlerServiceRole01E613C9"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:262:20)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocumentHandler/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocumentHandlerServiceRole09842811"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:308:19)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandHandler/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandHandlerServiceRole1B868A28"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:362:25)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandSyncHandler/ServiceRole/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandSyncHandlerServiceRole38CA5177"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new NodejsFunction in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:405:29)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DefaultStage/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDefaultStage3EEB07D6"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...new HttpApi2 in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:455:21)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--tax--calculate/TaxIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTtaxcalculateTaxIntegrationPermissionCE74F770"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:502:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--tax--calculate/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTtaxcalculate1904DA01"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:502:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/CognitoAuthorizer/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:502:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--tax--history/TaxIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETtaxhistoryTaxIntegrationPermissionD5275AD9"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:508:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--tax--history/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETtaxhistoryADD4876D"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:508:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--tax--history--{id}/TaxIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETtaxhistoryidTaxIntegrationPermission51068ECB"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:514:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--tax--history--{id}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETtaxhistoryid889E6FDE"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:514:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--tax--history--{id}/TaxIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEtaxhistoryidTaxIntegrationPermissionBAE3EC2C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:520:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--tax--history--{id}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEtaxhistoryid25B698CE"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:520:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--upload-url/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsuploadurlDocIntegrationPermissionC342F447"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:528:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--upload-url/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsuploadurl3E0199B6"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:528:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--extract/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsextractDocIntegrationPermission5EBDCA6D"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:534:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--extract/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsextractFB7B4266"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:534:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--bda-job/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsbdajobDocIntegrationPermission164F752A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:540:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--bda-job/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsbdajob48AE6912"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:540:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--documents/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETdocumentsDocIntegrationPermission4BB1622E"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:546:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--documents/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETdocumentsDDCDDB0B"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:546:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--documents--{id}--download-url/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETdocumentsiddownloadurlDocIntegrationPermission4B2A0041"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:552:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--documents--{id}--download-url/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETdocumentsiddownloadurl6FDA3862"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:552:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--documents--{id}/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEdocumentsidDocIntegrationPermission4FA01038"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:558:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--documents--{id}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEdocumentsid55748065"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:558:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--documents/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEdocumentsDocIntegrationPermissionEB011026"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:564:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/DELETE--documents/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiDELETEdocuments978FE59B"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:564:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--{id}--flagged--{index}--resolve/DocIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsidflaggedindexresolveDocIntegrationPermissionDCFCE638"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:570:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--{id}--flagged--{index}--resolve/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsidflaggedindexresolveB7879C76"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:570:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--credentials/CredIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETcredentialsCredIntegrationPermission2FABEF7C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:578:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--credentials/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETcredentialsF148711C"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:578:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--credentials--{id}--copy/CredIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTcredentialsidcopyCredIntegrationPermissionAC6D5953"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:584:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--credentials--{id}--copy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTcredentialsidcopy43C50A3B"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:584:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/PUT--credentials--{id}/CredIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPUTcredentialsidCredIntegrationPermission84FE38D3"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:590:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/PUT--credentials--{id}/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPUTcredentialsid995CB3B3"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:590:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--dashboard/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposdashboardHeartlandIntegrationPermission417FA1C1"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:598:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--dashboard/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposdashboard81CF6450"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:598:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--sales/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETpossalesHeartlandIntegrationPermissionA124DB01"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:604:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--sales/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETpossales446DAA47"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:604:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--import-tax-defaults/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposimporttaxdefaultsHeartlandIntegrationPermissionC7E89602"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:610:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--import-tax-defaults/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposimporttaxdefaultsF0306735"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:610:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--analytics/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposanalyticsHeartlandIntegrationPermission7D4B2246"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:616:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--analytics/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposanalytics723392CC"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:616:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--inventory/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposinventoryHeartlandIntegrationPermissionAF49E877"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:622:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--inventory/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposinventoryD9C53146"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:622:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--staff/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposstaffHeartlandIntegrationPermission3E03C647"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:628:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--staff/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposstaff5F1B92FF"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:628:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--sync-status/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETpossyncstatusHeartlandIntegrationPermission1863BEF7"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:634:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--sync-status/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETpossyncstatusCB8DD338"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:634:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--pos--sync/HeartlandIntegration-Permission": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTpossyncHeartlandIntegrationPermission8FC93079"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:640:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--pos--sync/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTpossync765254C4"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:640:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/TaxHandler/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "TaxHandlerServiceRoleDefaultPolicyBA5360C1"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.grantReadWriteData in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:241:11)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/CredentialHandler/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "CredentialHandlerServiceRoleDefaultPolicy9E18B6C6"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...NodejsFunction.addToRolePolicy in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:288:12)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/DocumentHandler/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "DocumentHandlerServiceRoleDefaultPolicy83ADEE0A"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.grantReadWrite in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:334:16)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandHandler/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandHandlerServiceRoleDefaultPolicyE90E52D5"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.grantReadData in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:390:11)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HeartlandSyncHandler/ServiceRole/DefaultPolicy/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HeartlandSyncHandlerServiceRoleDefaultPolicy336F3209"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        "...WrappedClass.grantReadWriteData in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:432:11)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--tax--calculate/TaxIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:502:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/POST--documents--upload-url/DocIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:528:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--credentials/CredIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETcredentialsCredIntegrationEFA7ABE0"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:578:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ],
+  "/FootSolutionsStack/HttpApi/GET--pos--dashboard/HeartlandIntegration/Resource": [
+    {
+      "type": "aws:cdk:logicalId",
+      "data": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+    },
+    {
+      "type": "aws:cdk:creationStack",
+      "data": [
+        ".../Users/jossai/Documents/GitHub/cpa-app/infrastructure/node_modules/aws-cdk-lib/aws-apigatewayv2/lib/http/api.js:1:96 in aws-cdk-lib...",
+        "Array.map (:)",
+        "...WrappedClass.<anonymous> in aws-cdk-lib...",
+        "new FootSolutionsStack (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/lib/foot-solutions-stack.ts:598:13)",
+        "<anonymous> (/Users/jossai/Documents/GitHub/cpa-app/infrastructure/bin/app.ts:8:1)",
+        "...node internals, ts-node, ts-node, ts-node..."
+      ]
+    }
+  ]
+}
