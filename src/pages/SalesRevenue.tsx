@@ -699,7 +699,7 @@ export default function SalesRevenue() {
         return { start: `${yr}-01-01`, end: `${yr}-12-31` };
       }
       case 'custom':
-      default:               return { start: ctDateStr(6), end: today }; // last 7 days
+      default:               return { start: today, end: today };
     }
   }
 
@@ -1488,11 +1488,11 @@ export default function SalesRevenue() {
                 </div>
 
                 {/* ── KPI metric cards (vs last year) ── */}
-                <KpiGrid data={dashQ.data} />
+                <KpiGrid data={dashQ.data} reportingData={reportingQ.data ?? null} filterStart={filterStart} filterEnd={filterEnd} />
 
                 {/* ── Two-column: Net Sales by Hour + Top Performers ── */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  <NetSalesByHourChart hourly={dashQ.data.hourly} />
+                  <NetSalesByHourChart hourly={dashQ.data.hourly} dailyTrend={analyticsQ.data?.dailyTrend} />
                   <TopPerformersPanel reportingData={reportingQ.data ?? null} analyticsData={analyticsQ.data ?? null} />
                 </div>
 
@@ -2867,29 +2867,28 @@ export default function SalesRevenue() {
 // ── KPI metric card with vs-last-year comparison ──────────────────────
 function KpiCard({
   label,
-  value,
-  lyValue,
+  current,
+  ly,
+  formatVal = (n) => fmtDec(n),
   sub,
   subLy,
 }: {
   label: string;
-  value: string;
-  lyValue?: string;
+  current: number;
+  ly?: number;
+  formatVal?: (n: number) => string;
   sub?: string;
   subLy?: string;
 }) {
-  // Compute % change from raw numbers passed as strings
-  const rawCurrent = parseFloat(value.replace(/[^0-9.-]/g, ''));
-  const rawLy = lyValue ? parseFloat(lyValue.replace(/[^0-9.-]/g, '')) : null;
-  const pctChange = rawLy != null && rawLy !== 0 ? ((rawCurrent - rawLy) / rawLy) * 100 : null;
+  const pctChange = ly != null && ly !== 0 ? ((current - ly) / ly) * 100 : null;
   const up = pctChange != null && pctChange >= 0;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-2">
       <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
-      <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
-      {lyValue && (
-        <p className="text-xs text-slate-400">vs. <span className="text-slate-500 font-medium">{lyValue}</span></p>
+      <p className="text-2xl font-bold text-slate-900 leading-none">{formatVal(current)}</p>
+      {ly != null && (
+        <p className="text-xs text-slate-400">vs. <span className="text-slate-500 font-medium">{formatVal(ly)}</span></p>
       )}
       {sub && <p className="text-xs text-slate-400">{sub}</p>}
       {subLy && <p className="text-[10px] text-slate-300">LY: {subLy}</p>}
@@ -2902,86 +2901,80 @@ function KpiCard({
   );
 }
 
-function KpiGrid({ data }: { data: DashboardResponse }) {
+function KpiGrid({
+  data,
+  reportingData,
+  filterStart,
+  filterEnd,
+}: {
+  data: DashboardResponse;
+  reportingData: ReportingResponse | null;
+  filterStart: string;
+  filterEnd: string;
+}) {
   const ly = data.lastYear;
 
-  // Use selectedRange when a custom filter is active, otherwise fall back to today
-  const primary = data.selectedRange ?? data.today;
-  const lyPrimary = ly?.selectedRange ?? ly?.today;
+  // ── Net sales from reporting dailyRows for the selected range ────
+  // reportingQ.dailyRows covers the last 30 days. When the filter falls
+  // within that window we can compute accurate net (post-discount/return)
+  // figures. Outside that window we fall back to gross rollup amounts.
+  const netForRange = useMemo(() => {
+    if (!reportingData?.dailyRows || reportingData.dailyRows.length === 0) return null;
+    const rows = reportingData.dailyRows.filter((r) => {
+      const d = String(r['date.date'] ?? '');
+      return d >= filterStart && d <= filterEnd;
+    });
+    if (rows.length === 0) return null;
+    return {
+      netSales: rows.reduce((s, r) => s + ((r['source_sales.net_sales'] as number) ?? 0), 0),
+      transactions: rows.reduce((s, r) => s + ((r['source_sales.transaction_count'] as number) ?? 0), 0),
+    };
+  }, [reportingData, filterStart, filterEnd]);
 
-  const primaryTickets = primary.ticketCount;
-  const primaryAmount = primary.totalAmount;
-  const avgTicket = primaryTickets > 0 ? primaryAmount / primaryTickets : 0;
+  // Primary amounts — prefer net from reporting, fall back to gross rollup
+  const primaryGross = data.selectedRange ?? data.today;
+  const primaryAmount = netForRange?.netSales ?? primaryGross.totalAmount;
+  const primaryTickets = netForRange?.transactions ?? primaryGross.ticketCount;
+
+  // LY — gross rollup only (no LY net data available)
+  const lyPrimary = ly?.selectedRange ?? ly?.today;
+  const lyAmount  = lyPrimary?.totalAmount ?? 0;
   const lyTickets = lyPrimary?.ticketCount ?? 0;
-  const lyAmount = lyPrimary?.totalAmount ?? 0;
+
+  const avgTicket   = primaryTickets > 0 ? primaryAmount / primaryTickets : 0;
   const lyAvgTicket = lyTickets > 0 ? lyAmount / lyTickets : 0;
 
-  // Derived: units sold (est. 1.5× tickets), units per ticket
-  const estUnits = primaryTickets * 1.5;
-  const lyEstUnits = lyTickets * 1.5;
-  const unitsPerTicket = primaryTickets > 0 ? estUnits / primaryTickets : 0;
-  const lyUnitsPerTicket = lyTickets > 0 ? lyEstUnits / lyTickets : 0;
+  const estUnits      = primaryTickets * 1.5;
+  const lyEstUnits    = lyTickets * 1.5;
+  const unitsPerTxn   = 1.5; // constant — units/ticket is always 1.5 estimate
+  const lyUnitsPerTxn = 1.5;
 
-  // Range label for the first card
-  const rangeLabel = data.selectedRangeStart && data.selectedRangeEnd
-    ? `${new Date(data.selectedRangeStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(data.selectedRangeEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+  // YTD net from reporting summary
+  const ytdNet        = reportingData?.summary?.totalNetSales ?? data.yearToDate.totalAmount;
+  const ytdTickets    = reportingData?.summary?.totalTransactions ?? data.yearToDate.ticketCount;
+  const lyYtdAmount   = ly?.yearToDate.totalAmount ?? 0;
+  const lyYtdTickets  = ly?.yearToDate.ticketCount ?? 0;
+
+  const rangeLabel = filterStart && filterEnd
+    ? `${new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(filterEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
     : 'Selected Period';
 
-  const metrics = [
-    {
-      label: 'Sales vs. Last Year',
-      value: fmtDec(primaryAmount),
-      lyValue: ly ? fmtDec(lyAmount) : undefined,
-      sub: rangeLabel,
-    },
-    {
-      label: 'Avg Transaction Value',
-      value: fmtDec(avgTicket),
-      lyValue: ly ? fmtDec(lyAvgTicket) : undefined,
-    },
-    {
-      label: '# of Tickets',
-      value: primaryTickets.toFixed(0),
-      lyValue: ly ? lyTickets.toFixed(0) : undefined,
-    },
-    {
-      label: 'Total Units Sold',
-      value: estUnits.toFixed(0),
-      lyValue: ly ? lyEstUnits.toFixed(0) : undefined,
-      sub: 'est. (1.5× tickets)',
-    },
-    {
-      label: 'Units / Transaction',
-      value: unitsPerTicket.toFixed(2),
-      lyValue: ly ? lyUnitsPerTicket.toFixed(2) : undefined,
-    },
-    {
-      label: 'Net Returns',
-      value: '$0',
-      lyValue: ly ? '$0' : undefined,
-      sub: 'not tracked in rollup',
-    },
-    {
-      label: 'Last 7 Days',
-      value: fmt(data.last7Days.totalAmount),
-      lyValue: ly ? fmt(ly.last7Days.totalAmount) : undefined,
-      sub: `${data.last7Days.ticketCount} tickets`,
-      subLy: ly ? `${ly.last7Days.ticketCount} tickets` : undefined,
-    },
-    {
-      label: 'Year to Date',
-      value: fmt(data.yearToDate.totalAmount),
-      lyValue: ly ? fmt(ly.yearToDate.totalAmount) : undefined,
-      sub: `${data.yearToDate.ticketCount} tickets`,
-      subLy: ly ? `${ly.yearToDate.ticketCount} tickets` : undefined,
-    },
-  ];
+  const netLabel = netForRange ? rangeLabel : `${rangeLabel} (gross)`;
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      {metrics.map((m) => (
-        <KpiCard key={m.label} {...m} />
-      ))}
+      <KpiCard label="Sales vs. Last Year"     current={primaryAmount}  ly={lyAmount > 0 ? lyAmount : undefined}     formatVal={fmtDec} sub={netLabel} />
+      <KpiCard label="Avg Transaction Value"   current={avgTicket}      ly={lyAvgTicket > 0 ? lyAvgTicket : undefined} formatVal={fmtDec} />
+      <KpiCard label="# of Tickets"            current={primaryTickets} ly={lyTickets > 0 ? lyTickets : undefined}    formatVal={(n) => n.toFixed(0)} />
+      <KpiCard label="Total Units Sold"        current={estUnits}       ly={lyEstUnits > 0 ? lyEstUnits : undefined}  formatVal={(n) => n.toFixed(0)} sub="est. (1.5× tickets)" />
+      <KpiCard label="Units / Transaction"     current={unitsPerTxn}    ly={lyUnitsPerTxn}                            formatVal={(n) => n.toFixed(2)} />
+      <KpiCard label="Net Returns"             current={0}              ly={undefined}                                formatVal={() => '$0'} sub="not tracked in rollup" />
+      <KpiCard label="Last 7 Days"             current={data.last7Days.totalAmount} ly={ly?.last7Days.totalAmount}    formatVal={fmt}
+        sub={`${data.last7Days.ticketCount} tickets`}
+        subLy={ly ? `${ly.last7Days.ticketCount} tickets` : undefined} />
+      <KpiCard label="Year to Date (Net)"      current={ytdNet}         ly={lyYtdAmount > 0 ? lyYtdAmount : undefined} formatVal={fmt}
+        sub={`${ytdTickets.toLocaleString()} tickets`}
+        subLy={ly ? `${lyYtdTickets.toLocaleString()} tickets` : undefined} />
     </div>
   );
 }
@@ -3082,7 +3075,7 @@ function NotesPanel() {
     <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <StickyNote className="w-4 h-4 text-amber-500" />
-        <h3 className="text-sm font-semibold text-amber-800">Notes</h3>
+        <h3 className="text-sm font-semibold text-amber-800">Action Items</h3>
         {active.length > 0 && (
           <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-white">
             {active.length}
@@ -3105,8 +3098,9 @@ function NotesPanel() {
               <span className="flex-1 text-xs text-slate-700 leading-snug">{n.text}</span>
               <button
                 onClick={() => removeNote(n.id)}
-                className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors"
-                aria-label="Remove note"
+                className="flex-shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
+                aria-label="Delete note"
+                title="Delete note"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -3119,7 +3113,7 @@ function NotesPanel() {
       {done.length > 0 && (
         <ul className="space-y-1">
           {done.map((n) => (
-            <li key={n.id} className="flex items-start gap-2 opacity-50">
+            <li key={n.id} className="flex items-start gap-2 opacity-60">
               <input
                 type="checkbox"
                 checked={true}
@@ -3130,8 +3124,9 @@ function NotesPanel() {
               <span className="flex-1 text-xs text-slate-500 line-through leading-snug">{n.text}</span>
               <button
                 onClick={() => removeNote(n.id)}
-                className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors"
-                aria-label="Remove note"
+                className="flex-shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
+                aria-label="Delete note"
+                title="Delete note"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -3147,7 +3142,7 @@ function NotesPanel() {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } }}
-          placeholder="Add note… (Enter to save)"
+          placeholder="Add action item… (Enter to save)"
           rows={2}
           className="flex-1 text-xs rounded-lg border border-amber-200 bg-white px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
         />
@@ -3163,12 +3158,19 @@ function NotesPanel() {
   );
 }
 
-// ── Net Sales by Hour chart (current vs last year, SVG area chart) ────
-function NetSalesByHourChart({ hourly }: { hourly?: DashboardResponse['hourly'] }) {
-  const [view, setView] = useState<'both' | 'current' | 'lastYear'>('both');
+// ── Net Sales by Hour / By Day chart ─────────────────────────────────
+function NetSalesByHourChart({
+  hourly,
+  dailyTrend,
+}: {
+  hourly?: DashboardResponse['hourly'];
+  dailyTrend?: AnalyticsResponse['dailyTrend'];
+}) {
+  type ChartMode = 'hour' | 'day';
+  type SeriesView = 'both' | 'current' | 'lastYear';
 
-  const current = hourly?.today ?? Array(24).fill(0) as number[];
-  const lastYear = hourly?.lastYear ?? Array(24).fill(0) as number[];
+  const [mode, setMode] = useState<ChartMode>('hour');
+  const [view, setView] = useState<SeriesView>('both');
 
   const hourLabels = ['12am','1am','2am','3am','4am','5am','6am','7am','8am','9am','10am','11am',
     '12pm','1pm','2pm','3pm','4pm','5pm','6pm','7pm','8pm','9pm','10pm','11pm'];
@@ -3178,154 +3180,216 @@ function NetSalesByHourChart({ hourly }: { hourly?: DashboardResponse['hourly'] 
   const iW = W - pad.left - pad.right;
   const iH = H - pad.top - pad.bottom;
 
-  const maxVal = Math.max(...current, ...lastYear, 1);
+  // ── Hour mode data ────────────────────────────────────────────────
+  const curHour = hourly?.today ?? (Array(24).fill(0) as number[]);
+  const lyHour  = hourly?.lastYear ?? (Array(24).fill(0) as number[]);
+
+  // ── Day mode data ─────────────────────────────────────────────────
+  // Use analytics daily trend for current; no LY daily data available so hide LY toggle in day mode
+  const dayData = useMemo(() => {
+    if (!dailyTrend || dailyTrend.length === 0) return [];
+    return [...dailyTrend].sort((a, b) => a.date.localeCompare(b.date));
+  }, [dailyTrend]);
+
+  // Active series arrays
+  const current = mode === 'hour' ? curHour : dayData.map((d) => d.amount);
+  const lastYearVals = mode === 'hour' ? lyHour : [];
+  const hasLY = mode === 'hour';
+
+  const maxVal = Math.max(...current, ...(hasLY ? lastYearVals : []), 1);
   const niceMax = (() => {
-    if (maxVal <= 100) return Math.ceil(maxVal / 25) * 25;
-    if (maxVal <= 500) return Math.ceil(maxVal / 100) * 100;
-    if (maxVal <= 2000) return Math.ceil(maxVal / 250) * 250;
-    return Math.ceil(maxVal / 500) * 500;
+    if (maxVal <= 100)   return Math.ceil(maxVal / 25) * 25;
+    if (maxVal <= 500)   return Math.ceil(maxVal / 100) * 100;
+    if (maxVal <= 2000)  return Math.ceil(maxVal / 250) * 250;
+    if (maxVal <= 10000) return Math.ceil(maxVal / 1000) * 1000;
+    return Math.ceil(maxVal / 2000) * 2000;
   })();
+
+  const n = current.length || 1;
 
   function toPoints(vals: number[]) {
     return vals.map((v, i) => ({
-      x: pad.left + (i / 23) * iW,
+      x: pad.left + (vals.length === 1 ? iW / 2 : (i / (vals.length - 1)) * iW),
       y: pad.top + iH - (v / niceMax) * iH,
     }));
   }
 
   function areaPath(pts: Array<{ x: number; y: number }>) {
+    if (pts.length === 0) return '';
     const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
     const base = `L ${pts[pts.length - 1]!.x.toFixed(1)},${(pad.top + iH).toFixed(1)} L ${pts[0]!.x.toFixed(1)},${(pad.top + iH).toFixed(1)} Z`;
     return `${line} ${base}`;
   }
 
   const curPts = toPoints(current);
-  const lyPts = toPoints(lastYear);
+  const lyPts  = toPoints(lastYearVals);
 
-  // Y ticks
   const yTicks = [0, niceMax * 0.5, niceMax];
-  // X ticks: every 3 hours
-  const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23];
 
-  const [hoverHour, setHoverHour] = useState<number | null>(null);
+  // X ticks — up to 6 evenly spaced
+  const xTickCount = Math.min(6, n);
+  const xTicks = Array.from({ length: xTickCount }, (_, i) =>
+    Math.round((i / Math.max(xTickCount - 1, 1)) * (n - 1))
+  );
+
+  function xLabel(i: number): string {
+    if (mode === 'hour') return hourLabels[i] ?? '';
+    const d = dayData[i];
+    if (!d) return '';
+    return new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/Chicago' });
+  }
+
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Reset hover when mode changes
+  const prevMode = useMemo(() => mode, [mode]);
+  if (prevMode !== mode && hoverIdx !== null) setHoverIdx(null);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
-      <h3 className="text-sm font-semibold text-slate-900 mb-4 text-center">Net Sales by Hour</h3>
+      {/* Header row: title + By Hr / By Day toggle */}
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-slate-900">Net Sales</h3>
+        <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+          <button
+            onClick={() => { setMode('hour'); setHoverIdx(null); }}
+            className={`px-3 py-1.5 transition ${mode === 'hour' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
+          >
+            By Hr
+          </button>
+          <button
+            onClick={() => { setMode('day'); setHoverIdx(null); setView('current'); }}
+            className={`px-3 py-1.5 border-l border-slate-200 transition ${mode === 'day' ? 'bg-blue-600 text-white' : 'text-slate-500 hover:bg-slate-50'}`}
+          >
+            By Day
+          </button>
+        </div>
+      </div>
+
+      {/* Chart */}
       <div className="relative">
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          className="w-full"
-          preserveAspectRatio="xMidYMid meet"
-          onMouseLeave={() => setHoverHour(null)}
-        >
-          <defs>
-            <linearGradient id="hourCurGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#1e40af" stopOpacity="0.7" />
-              <stop offset="100%" stopColor="#1e40af" stopOpacity="0.05" />
-            </linearGradient>
-            <linearGradient id="hourLyGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#a855f7" stopOpacity="0.55" />
-              <stop offset="100%" stopColor="#a855f7" stopOpacity="0.05" />
-            </linearGradient>
-          </defs>
+        {mode === 'day' && dayData.length === 0 ? (
+          <p className="text-xs text-slate-400 text-center py-10">No daily data — Analytics tab loads this automatically.</p>
+        ) : (
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            className="w-full"
+            preserveAspectRatio="xMidYMid meet"
+            onMouseLeave={() => setHoverIdx(null)}
+          >
+            <defs>
+              <linearGradient id="hourCurGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#1e40af" stopOpacity="0.7" />
+                <stop offset="100%" stopColor="#1e40af" stopOpacity="0.05" />
+              </linearGradient>
+              <linearGradient id="hourLyGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#a855f7" stopOpacity="0.55" />
+                <stop offset="100%" stopColor="#a855f7" stopOpacity="0.05" />
+              </linearGradient>
+            </defs>
 
-          {/* Y gridlines */}
-          {yTicks.map((t, i) => {
-            const y = pad.top + iH - (t / niceMax) * iH;
-            return (
-              <g key={i}>
-                <line x1={pad.left} x2={pad.left + iW} y1={y} y2={y} stroke="#e2e8f0" strokeWidth={1} strokeDasharray={i === 0 ? '0' : '3,3'} />
-                <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize={9} fill="#94a3b8" fontFamily="monospace">
-                  {t >= 1000 ? `${(t / 1000).toFixed(0)}k` : t}
+            {/* Y gridlines */}
+            {yTicks.map((t, i) => {
+              const y = pad.top + iH - (t / niceMax) * iH;
+              return (
+                <g key={i}>
+                  <line x1={pad.left} x2={pad.left + iW} y1={y} y2={y} stroke="#e2e8f0" strokeWidth={1} strokeDasharray={i === 0 ? '0' : '3,3'} />
+                  <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize={9} fill="#94a3b8" fontFamily="monospace">
+                    {t >= 1000 ? `${(t / 1000).toFixed(0)}k` : t}
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* X axis */}
+            <line x1={pad.left} x2={pad.left + iW} y1={pad.top + iH} y2={pad.top + iH} stroke="#cbd5e1" strokeWidth={1} />
+            {xTicks.map((i) => {
+              const x = pad.left + (n === 1 ? iW / 2 : (i / (n - 1)) * iW);
+              return (
+                <text key={i} x={x} y={pad.top + iH + 14} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                  {xLabel(i)}
                 </text>
-              </g>
-            );
-          })}
+              );
+            })}
 
-          {/* X axis */}
-          <line x1={pad.left} x2={pad.left + iW} y1={pad.top + iH} y2={pad.top + iH} stroke="#cbd5e1" strokeWidth={1} />
-          {xTicks.map((i) => {
-            const x = pad.left + (i / 23) * iW;
-            return (
-              <text key={i} x={x} y={pad.top + iH + 14} textAnchor="middle" fontSize={9} fill="#94a3b8">
-                {hourLabels[i]}
-              </text>
-            );
-          })}
+            {/* Last year area (hour mode only) */}
+            {hasLY && (view === 'both' || view === 'lastYear') && lyPts.length > 0 && (
+              <>
+                <path d={areaPath(lyPts)} fill="url(#hourLyGrad)" />
+                <path d={lyPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                  fill="none" stroke="#a855f7" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+              </>
+            )}
 
-          {/* Last year area */}
-          {(view === 'both' || view === 'lastYear') && (
-            <>
-              <path d={areaPath(lyPts)} fill="url(#hourLyGrad)" />
-              <path d={lyPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
-                fill="none" stroke="#a855f7" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
+            {/* Current area */}
+            {(view === 'both' || view === 'current') && curPts.length > 0 && (
+              <>
+                <path d={areaPath(curPts)} fill="url(#hourCurGrad)" />
+                <path d={curPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                  fill="none" stroke="#1e40af" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+              </>
+            )}
 
-          {/* Current area (on top) */}
-          {(view === 'both' || view === 'current') && (
-            <>
-              <path d={areaPath(curPts)} fill="url(#hourCurGrad)" />
-              <path d={curPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
-                fill="none" stroke="#1e40af" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-            </>
-          )}
+            {/* Hover crosshair + tooltip */}
+            {hoverIdx !== null && (() => {
+              const x = pad.left + (n === 1 ? iW / 2 : (hoverIdx / (n - 1)) * iW);
+              const curVal = current[hoverIdx] ?? 0;
+              const lyVal  = hasLY ? (lastYearVals[hoverIdx] ?? 0) : null;
+              const label  = xLabel(hoverIdx);
+              const ttW = 140, ttH = hasLY && lyVal !== null ? 56 : 42;
+              const ttX = x + 10 + ttW > W ? x - ttW - 10 : x + 10;
+              const ttY = pad.top;
+              return (
+                <g pointerEvents="none">
+                  <line x1={x} x2={x} y1={pad.top} y2={pad.top + iH} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3,3" />
+                  <rect x={ttX} y={ttY} width={ttW} height={ttH} rx={5} fill="#0f172a" opacity={0.92} />
+                  <text x={ttX + 8} y={ttY + 15} fontSize={10} fill="#cbd5e1">{label}</text>
+                  <text x={ttX + 8} y={ttY + 30} fontSize={10} fill="#60a5fa">Current: {fmtDec(curVal)}</text>
+                  {hasLY && lyVal !== null && (
+                    <text x={ttX + 8} y={ttY + 44} fontSize={10} fill="#c084fc">Last yr: {fmtDec(lyVal)}</text>
+                  )}
+                </g>
+              );
+            })()}
 
-          {/* Hover crosshair + tooltip */}
-          {hoverHour !== null && (() => {
-            const x = pad.left + (hoverHour / 23) * iW;
-            const curVal = current[hoverHour] ?? 0;
-            const lyVal = lastYear[hoverHour] ?? 0;
-            const ttW = 130, ttH = 52;
-            const ttX = x + 10 + ttW > W ? x - ttW - 10 : x + 10;
-            const ttY = pad.top;
-            return (
-              <g pointerEvents="none">
-                <line x1={x} x2={x} y1={pad.top} y2={pad.top + iH} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3,3" />
-                <rect x={ttX} y={ttY} width={ttW} height={ttH} rx={5} fill="#0f172a" opacity={0.92} />
-                <text x={ttX + 8} y={ttY + 15} fontSize={10} fill="#cbd5e1">{hourLabels[hoverHour]}</text>
-                <text x={ttX + 8} y={ttY + 30} fontSize={10} fill="#60a5fa">Current: {fmtDec(curVal)}</text>
-                <text x={ttX + 8} y={ttY + 44} fontSize={10} fill="#c084fc">Last yr: {fmtDec(lyVal)}</text>
-              </g>
-            );
-          })()}
-
-          {/* Invisible hover zones */}
-          {Array.from({ length: 24 }, (_, i) => {
-            const x = pad.left + (i / 23) * iW;
-            const slotW = iW / 23;
-            return (
-              <rect
-                key={i}
-                x={x - slotW / 2}
-                y={pad.top}
-                width={slotW}
-                height={iH}
-                fill="transparent"
-                onMouseEnter={() => setHoverHour(i)}
-                style={{ cursor: 'crosshair' }}
-              />
-            );
-          })}
-        </svg>
+            {/* Invisible hover zones */}
+            {Array.from({ length: n }, (_, i) => {
+              const x = pad.left + (n === 1 ? iW / 2 : (i / (n - 1)) * iW);
+              const slotW = n === 1 ? iW : iW / (n - 1);
+              return (
+                <rect
+                  key={i}
+                  x={x - slotW / 2}
+                  y={pad.top}
+                  width={slotW}
+                  height={iH}
+                  fill="transparent"
+                  onMouseEnter={() => setHoverIdx(i)}
+                  style={{ cursor: 'crosshair' }}
+                />
+              );
+            })}
+          </svg>
+        )}
       </div>
 
-      {/* Legend / toggle buttons */}
-      <div className="flex justify-center gap-3 mt-3">
-        <button
-          onClick={() => setView(view === 'current' ? 'both' : 'current')}
-          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'lastYear' ? 'bg-slate-100 text-slate-400' : 'bg-blue-700 text-white shadow-sm'}`}
-        >
-          Current
-        </button>
-        <button
-          onClick={() => setView(view === 'lastYear' ? 'both' : 'lastYear')}
-          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'current' ? 'bg-slate-100 text-slate-400' : 'bg-purple-600 text-white shadow-sm'}`}
-        >
-          Last Year
-        </button>
-      </div>
+      {/* Current / Last Year toggle — only shown in hour mode */}
+      {mode === 'hour' && (
+        <div className="flex justify-center gap-3 mt-3">
+          <button
+            onClick={() => setView(view === 'current' ? 'both' : 'current')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'lastYear' ? 'bg-slate-100 text-slate-400' : 'bg-blue-700 text-white shadow-sm'}`}
+          >
+            Current
+          </button>
+          <button
+            onClick={() => setView(view === 'lastYear' ? 'both' : 'lastYear')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'current' ? 'bg-slate-100 text-slate-400' : 'bg-purple-600 text-white shadow-sm'}`}
+          >
+            Last Year
+          </button>
+        </div>
+      )}
     </div>
   );
 }
