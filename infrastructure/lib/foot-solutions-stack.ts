@@ -388,6 +388,9 @@ export class FootSolutionsStack extends Stack {
 
     // Grant DynamoDB read for cache reads (writes happen in sync Lambda)
     table.grantReadData(heartlandFn);
+    // Allow writing the synthetic "POS Import" document record so it shows up
+    // in the user's Documents sidebar / CPA package after each import.
+    table.grantWriteData(heartlandFn);
 
     // Grant Secrets Manager read for the Heartland API token only
     heartlandFn.addToRolePolicy(
@@ -573,6 +576,12 @@ export class FootSolutionsStack extends Stack {
       integration: docIntegration,
       authorizer: jwtAuthorizer,
     });
+    httpApi.addRoutes({
+      path: '/documents/register-supporting',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: docIntegration,
+      authorizer: jwtAuthorizer,
+    });
 
     // Credential routes
     httpApi.addRoutes({
@@ -640,6 +649,30 @@ export class FootSolutionsStack extends Stack {
     httpApi.addRoutes({
       path: '/pos/sync',
       methods: [apigwv2.HttpMethod.POST],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/purchasing',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/purchasing/orders/{id}/lines',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/reporting',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/insights',
+      methods: [apigwv2.HttpMethod.GET],
       integration: heartlandIntegration,
       authorizer: jwtAuthorizer,
     });

@@ -41,6 +41,8 @@ export interface TaxFormHandle {
    * are left alone. Returns the count of fields actually filled.
    */
   hydrateFromDocuments: (totals: Record<string, number>) => number;
+  /** Get a snapshot of the current form data (used to build CPA package). */
+  getFormData: () => TaxFormData;
 }
 
 const DRAFT_STORAGE_KEY = 'foot-solutions:tax-form-draft';
@@ -421,6 +423,9 @@ export default forwardRef<TaxFormHandle, Props>(function TaxForm(
 
   // Expose imperative subtractTotals to parent so it can undo a deleted doc
   useImperativeHandle(ref, () => ({
+    getFormData() {
+      return form;
+    },
     subtractTotals(totals) {
       setForm((prev) => {
         const prevAsRecord = prev as unknown as Record<string, unknown>;
@@ -512,7 +517,7 @@ export default forwardRef<TaxFormHandle, Props>(function TaxForm(
       });
       return filledCount;
     },
-  }));
+  }), [form]);
 
   function update<K extends keyof TaxFormData>(key: K, value: TaxFormData[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -595,24 +600,83 @@ export default forwardRef<TaxFormHandle, Props>(function TaxForm(
     setImportMsg(null);
     try {
       const resp = await api.get<{
-        importedFields: { totalRevenue?: number; salesTaxCollected?: number };
-        metadata: { ticketCount: number; daysWithSales: number };
+        importedFields: {
+          totalRevenue?: number;
+          salesTaxCollected?: number;
+          cogs?: number;
+          endingInventory?: number;
+        };
+        metadata: {
+          ticketCount: number;
+          daysWithSales: number;
+          netSales: number | null;
+          netMargin: number | null;
+          avgMarginPct: number | null;
+          cogsEstimate: number | null;
+          endingInventoryCost: number | null;
+          totalDiscounts: number;
+          reportingDataAvailable: boolean;
+          inventoryDataAvailable: boolean;
+        };
+        note: string;
+        docPersisted?: boolean;
+        docId?: string;
       }>('/pos/import-tax-defaults', { params: { taxYear: form.taxYear } });
 
       const fields = resp.data.importedFields;
       const meta = resp.data.metadata;
-      setForm((prev) => ({
-        ...prev,
-        ...(fields.totalRevenue !== undefined && {
-          totalRevenue: fields.totalRevenue,
-        }),
-        ...(fields.salesTaxCollected !== undefined && {
-          salesTaxCollected: fields.salesTaxCollected,
-        }),
-      }));
-      setImportMsg(
-        `Imported $${fields.totalRevenue?.toLocaleString()} revenue across ${meta.ticketCount} transactions on ${meta.daysWithSales} sales days.`
-      );
+
+      setForm((prev) => {
+        const next = { ...prev };
+        if (fields.totalRevenue !== undefined) next.totalRevenue = fields.totalRevenue;
+        if (fields.salesTaxCollected !== undefined) next.salesTaxCollected = fields.salesTaxCollected;
+        // Only fill COGS if currently empty (don't clobber a value the user
+        // typed or that was extracted from a P&L).
+        if (
+          fields.cogs !== undefined &&
+          fields.cogs > 0 &&
+          (prev.cogs === undefined || prev.cogs === 0)
+        ) {
+          next.cogs = fields.cogs;
+        }
+        if (
+          fields.endingInventory !== undefined &&
+          fields.endingInventory > 0 &&
+          (prev.endingInventory === undefined || prev.endingInventory === 0)
+        ) {
+          next.endingInventory = fields.endingInventory;
+        }
+        return next;
+      });
+
+      // Refresh documents sidebar / CPA package to show the new POS Import doc
+      void queryClient.invalidateQueries({ queryKey: ['documents'] });
+
+      // Build a friendly multi-line summary so the owner sees what came in
+      const lines: string[] = [];
+      if (fields.totalRevenue !== undefined) {
+        lines.push(
+          `Revenue: $${fields.totalRevenue.toLocaleString()}${meta.reportingDataAvailable ? ' (net sales)' : ' (reverse-calculated from gross)'}`
+        );
+      }
+      if (fields.salesTaxCollected !== undefined) {
+        lines.push(`Sales tax collected: $${fields.salesTaxCollected.toLocaleString()}`);
+      }
+      if (fields.cogs !== undefined && fields.cogs > 0) {
+        lines.push(
+          `COGS: $${fields.cogs.toLocaleString()}${
+            meta.avgMarginPct != null ? ` (avg margin ${meta.avgMarginPct}%)` : ''
+          }`
+        );
+      }
+      if (fields.endingInventory !== undefined && fields.endingInventory > 0) {
+        lines.push(`Ending inventory cost: $${fields.endingInventory.toLocaleString()}`);
+      }
+      lines.push(`${meta.ticketCount.toLocaleString()} transactions across ${meta.daysWithSales} sales days.`);
+      if (resp.data.docPersisted) {
+        lines.push('A "POS Import" record was saved to your documents and will be included in the CPA package.');
+      }
+      setImportMsg(lines.join(' · '));
     } catch (err) {
       const message =
         (err as { response?: { data?: { error?: string } } })?.response?.data
@@ -672,15 +736,16 @@ export default forwardRef<TaxFormHandle, Props>(function TaxForm(
       <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-4 flex items-start justify-between gap-4">
         <div className="flex-1">
           <p className="text-sm font-medium text-blue-900">
-            Import revenue from Heartland POS
+            Import from Heartland POS
           </p>
           <p className="text-xs text-blue-700 mt-0.5">
-            Pulls all completed payments for tax year {form.taxYear} and pre-fills
-            Total Revenue and Sales Tax Collected. Sales tax is reverse-calculated
-            from gross at the Denton 8.25% combined rate.
+            Pulls tax year {form.taxYear} from your synced Heartland data: net sales,
+            sales tax, COGS estimate (from net margin), and ending inventory cost when
+            available. A "POS Import" record is saved to your documents and bundled
+            into the CPA package automatically.
           </p>
           {importMsg && (
-            <p className="text-xs text-blue-900 mt-2 font-medium">{importMsg}</p>
+            <p className="text-xs text-blue-900 mt-2 font-medium whitespace-pre-line">{importMsg}</p>
           )}
         </div>
         <button

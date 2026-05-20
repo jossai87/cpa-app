@@ -158,7 +158,9 @@ export type DocType =
   | 'fixed-assets'
   | 'insurance'
   | 'lease'
-  | 'general';
+  | 'general'
+  | 'cpa-supporting'
+  | 'pos-import';
 
 export interface UploadedDocument {
   objectKey: string;

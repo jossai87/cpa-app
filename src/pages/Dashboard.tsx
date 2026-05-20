@@ -2,16 +2,21 @@ import {
   Calculator,
   KeyRound,
   TrendingUp,
-  Package,
   Users,
   ClipboardCheck,
-  BarChart3,
   LogOut,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import TileCard from '../components/TileCard';
+import CentralTimeBadge from '../components/CentralTimeBadge';
 
 const tiles = [
+  {
+    title: 'Sales & Revenue',
+    icon: TrendingUp,
+    href: '/sales',
+    active: true,
+  },
   {
     title: 'CPA Tax Assistant',
     icon: Calculator,
@@ -25,18 +30,6 @@ const tiles = [
     active: true,
   },
   {
-    title: 'Sales & Revenue',
-    icon: TrendingUp,
-    href: '/sales',
-    active: true,
-  },
-  {
-    title: 'Inventory',
-    icon: Package,
-    href: '/inventory',
-    active: false,
-  },
-  {
     title: 'Payroll',
     icon: Users,
     href: '/payroll',
@@ -46,12 +39,6 @@ const tiles = [
     title: 'Franchise Compliance',
     icon: ClipboardCheck,
     href: '/compliance',
-    active: false,
-  },
-  {
-    title: 'Reports',
-    icon: BarChart3,
-    href: '/reports',
     active: false,
   },
 ];
@@ -67,8 +54,8 @@ export default function Dashboard() {
     <div className="min-h-screen bg-brand-50">
       {/* Header */}
       <header className="bg-white border-b border-brand-200 px-6 py-4">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div>
+        <div className="max-w-6xl mx-auto flex items-center justify-between gap-4">
+          <div className="min-w-0">
             <h1 className="text-xl font-semibold text-brand-900">
               Foot Solutions mngnt screen
             </h1>
@@ -76,14 +63,17 @@ export default function Dashboard() {
               <p className="text-sm text-brand-500 mt-0.5">{user.email}</p>
             )}
           </div>
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 text-sm text-brand-600 hover:text-brand-900 transition-colors"
-            aria-label="Sign out"
-          >
-            <LogOut className="w-4 h-4" aria-hidden="true" />
-            Sign out
-          </button>
+          <div className="flex items-center gap-4 flex-shrink-0">
+            <CentralTimeBadge />
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2 text-sm text-brand-600 hover:text-brand-900 transition-colors"
+              aria-label="Sign out"
+            >
+              <LogOut className="w-4 h-4" aria-hidden="true" />
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 

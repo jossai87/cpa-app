@@ -32,9 +32,12 @@ const DOC_TYPE_LABELS: Record<DocType, string> = {
   insurance: 'Insurance',
   lease: 'Lease Agreements',
   general: 'Other',
+  'cpa-supporting': 'CPA Package — Supporting',
+  'pos-import': 'POS Imports (Heartland)',
 };
 
 const DOC_TYPE_ORDER: DocType[] = [
+  'pos-import',
   'bank-statement',
   'line-of-credit',
   'profit-loss',
@@ -45,6 +48,7 @@ const DOC_TYPE_ORDER: DocType[] = [
   'lease',
   'fixed-assets',
   'general',
+  'cpa-supporting',
 ];
 
 function fmtDate(iso: string): string {

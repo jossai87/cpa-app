@@ -858,6 +858,18 @@ async function handleDownloadUrl(
 
   if (!item) return json(404, { error: 'Document not found' });
 
+  // Synthetic docs (e.g. POS Import summaries) don't live in S3 — they store
+  // their payload inline. Return the JSON content directly so the frontend
+  // can render or download it without a presigned URL.
+  if (item['docType'] === 'pos-import' && item['posImportSummary']) {
+    return json(200, {
+      inline: true,
+      fileName: item['fileName'],
+      contentType: 'application/json',
+      content: JSON.stringify(item['posImportSummary'], null, 2),
+    });
+  }
+
   const objectKey = item['objectKey'] as string;
   if (!objectKey.startsWith(`${userId}/`)) {
     return json(403, { error: 'Access denied' });
@@ -911,20 +923,25 @@ async function handleDeleteDocument(
 
   const sk = item['sk'] as string;
   const objectKey = item['objectKey'] as string;
+  const isSynthetic = item['docType'] === 'pos-import';
 
-  // Belt-and-suspenders: confirm ownership via S3 prefix
-  if (!objectKey.startsWith(`${userId}/`)) {
+  // For real docs (uploaded to S3), confirm ownership via prefix.
+  // Synthetic docs use a non-userId-prefixed key intentionally.
+  if (!isSynthetic && !objectKey.startsWith(`${userId}/`)) {
     return json(403, { error: 'Access denied' });
   }
 
-  // Delete S3 object first; if it fails, don't orphan the metadata
-  try {
-    await s3Client.send(
-      new DeleteObjectCommand({ Bucket: DOCS_BUCKET, Key: objectKey })
-    );
-  } catch (err) {
-    console.error('Failed to delete S3 object:', (err as Error).message);
-    // Continue — S3 errors shouldn't strand the user. They can re-delete from console.
+  // Delete S3 object first (only for real S3-backed docs); if it fails,
+  // don't orphan the metadata.
+  if (!isSynthetic) {
+    try {
+      await s3Client.send(
+        new DeleteObjectCommand({ Bucket: DOCS_BUCKET, Key: objectKey })
+      );
+    } catch (err) {
+      console.error('Failed to delete S3 object:', (err as Error).message);
+      // Continue — S3 errors shouldn't strand the user.
+    }
   }
 
   try {
@@ -976,9 +993,14 @@ async function handleDeleteAllDocuments(
     return json(200, { deletedCount: 0 });
   }
 
-  // Delete S3 objects in parallel (best-effort — log failures but continue)
+  // Delete S3 objects in parallel (best-effort — log failures but continue).
+  // Synthetic docs (pos-import) live only in DynamoDB, so we skip the S3 call
+  // for them entirely rather than counting their absence as a failure.
   const s3Results = await Promise.allSettled(
     items.map((item) => {
+      if (item['docType'] === 'pos-import') {
+        return Promise.resolve(); // nothing in S3
+      }
       const objectKey = item['objectKey'] as string;
       if (!objectKey || !objectKey.startsWith(`${userId}/`)) {
         return Promise.reject(new Error('Invalid object key'));
@@ -1259,6 +1281,78 @@ async function handleResolveFlagged(
   });
 }
 
+// ── Register a CPA-supporting document (no AI extraction) ─────────────
+//
+// Used by the "CPA Package" feature on the tax assistant. The user uploads
+// supplementary files (prior-year returns, bank statements, etc.) that they
+// just want to forward to their CPA. We don't run Bedrock on them — we just
+// record metadata so they show up in the docs list and can be bundled into
+// the downloadable zip.
+
+async function handleRegisterSupporting(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  userId: string
+): Promise<APIGatewayProxyResultV2> {
+  if (!event.body) return json(400, { error: 'Request body is required' });
+
+  let body: { objectKey?: string; fileName?: string; contentType?: string; notes?: string };
+  try {
+    body = JSON.parse(event.body);
+  } catch {
+    return json(400, { error: 'Invalid JSON in request body' });
+  }
+
+  if (!body.objectKey) return json(400, { error: 'objectKey is required' });
+  if (!body.objectKey.startsWith(`${userId}/`)) {
+    return json(403, { error: 'Access denied to this document' });
+  }
+
+  const docId = uuidv4();
+  const uploadedAt = new Date().toISOString();
+  const fileName =
+    body.fileName ?? body.objectKey.split('/').pop() ?? 'supporting-document';
+  const contentType = body.contentType ?? inferContentType(fileName);
+
+  try {
+    await docClient.send(
+      new PutCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          userId,
+          sk: `DOC#${uploadedAt}#${docId}`,
+          docId,
+          objectKey: body.objectKey,
+          fileName,
+          docType: 'cpa-supporting',
+          contentType,
+          uploadedAt,
+          appliedTotals: {},
+          flagged: [],
+          bankName: null,
+          periodStart: null,
+          periodEnd: null,
+          confidence: null,
+          notes: body.notes ?? null,
+          autoClassified: false,
+          autoClassifyResult: null,
+        },
+      })
+    );
+  } catch (err) {
+    console.error('Failed to register supporting doc:', (err as Error).message);
+    return json(500, { error: 'Failed to register supporting document' });
+  }
+
+  return json(200, {
+    docId,
+    objectKey: body.objectKey,
+    fileName,
+    docType: 'cpa-supporting',
+    contentType,
+    uploadedAt,
+  });
+}
+
 // ── Main Handler ─────────────────────────────────────────────────────
 
 export const handler = async (
@@ -1283,6 +1377,8 @@ export const handler = async (
       return handleDeleteAllDocuments(userId);
     case 'POST /documents/{id}/flagged/{index}/resolve':
       return handleResolveFlagged(event, userId);
+    case 'POST /documents/register-supporting':
+      return handleRegisterSupporting(event, userId);
     default:
       return json(404, { error: 'Route not found' });
   }

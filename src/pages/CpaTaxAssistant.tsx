@@ -7,6 +7,8 @@ import TaxForm, { TaxFormHandle } from '../components/TaxForm';
 import TaxResult from '../components/TaxResult';
 import TaxHistoryList from '../components/TaxHistoryList';
 import DocumentsSidebar from '../components/DocumentsSidebar';
+import CpaPackage from '../components/CpaPackage';
+import CentralTimeBadge from '../components/CentralTimeBadge';
 import Spinner from '../components/Spinner';
 import { useDocuments, useDeleteAllDocuments } from '../hooks/useDocuments';
 import type { TaxFormData, TaxSession } from '../types';
@@ -177,6 +179,9 @@ export default function CpaTaxAssistant() {
             Dashboard
           </Link>
           <h1 className="text-xl font-semibold text-slate-900">CPA Tax Assistant</h1>
+          <div className="ml-auto">
+            <CentralTimeBadge />
+          </div>
         </div>
       </header>
 
@@ -278,6 +283,20 @@ export default function CpaTaxAssistant() {
                 <TaxResult taxYear={activeSession.taxYear} result={activeSession.result} />
               </section>
             )}
+
+            <section aria-labelledby="cpa-package-section-heading">
+              <h2
+                id="cpa-package-section-heading"
+                className="text-lg font-medium text-slate-800 mb-4"
+              >
+                Send to CPA
+              </h2>
+              <CpaPackage
+                getFormData={() => formRef.current?.getFormData()}
+                recentSession={activeSession}
+                documents={documents}
+              />
+            </section>
 
             <section aria-labelledby="tax-history-heading">
               <h2 id="tax-history-heading" className="text-lg font-medium text-slate-800 mb-4">
