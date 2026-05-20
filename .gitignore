@@ -1,0 +1,51 @@
+# ── Dependencies ─────────────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ── Build outputs ─────────────────────────────────────────────────────
+dist/
+build/
+out/
+lambda/dist
+lambda/node_modules/
+infrastructure/cdk.out/
+
+# ── Environment / secrets ─────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+
+# ── AWS / CDK ─────────────────────────────────────────────────────────
+cdk.out/
+cdk.context.json
+.cdk.staging/
+
+# ── TypeScript ────────────────────────────────────────────────────────
+*.js.map
+*.d.ts
+tsconfig.tsbuildinfo
+
+# ── Logs ─────────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── OS / Editor ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Sensitive documents ───────────────────────────────────────────────
+foot-solutions-buildout-plan.md
+documents/
+
+# ── Vite ─────────────────────────────────────────────────────────────
+vite.config.js.timestamp-*

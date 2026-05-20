@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -13,6 +13,10 @@ import {
   Tag,
   CloudDownload,
   Download,
+  AlertCircle,
+  StickyNote,
+  X,
+  Trophy,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
@@ -27,6 +31,24 @@ interface DashboardResponse {
   last7Days: { totalAmount: number; ticketCount: number };
   last30Days: { totalAmount: number; ticketCount: number };
   yearToDate: { totalAmount: number; ticketCount: number };
+  selectedRange?: { totalAmount: number; ticketCount: number };
+  selectedRangeStart?: string;
+  selectedRangeEnd?: string;
+  lastYear?: {
+    today: { totalAmount: number; ticketCount: number };
+    last7Days: { totalAmount: number; ticketCount: number };
+    last30Days: { totalAmount: number; ticketCount: number };
+    yearToDate: { totalAmount: number; ticketCount: number };
+    selectedRange?: { totalAmount: number; ticketCount: number };
+  };
+  hourly?: {
+    today: number[];
+    lastYear: number[];
+  };
+  alerts?: {
+    openOrders: number;
+    lowStock: number;
+  };
   syncInfo?: { lastSyncAt: string | null; status: string };
   asOf: string;
 }
@@ -598,6 +620,101 @@ export default function SalesRevenue() {
   const [tab, setTab] = useState<Tab>('overview');
   const [analyticsDays, setAnalyticsDays] = useState(7);
 
+  // ── Overview date filter ──────────────────────────────────────────
+  // Helper: YYYY-MM-DD string for a date N days ago (Central Time)
+  function ctDateStr(offsetDays = 0): string {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+  function startOfWeek(): string {
+    const d = new Date();
+    const day = d.getDay(); // 0=Sun
+    d.setDate(d.getDate() - day);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+  function startOfMonth(): string {
+    return `${ctDateStr(0).slice(0, 7)}-01`;
+  }
+  function startOfYear(): string {
+    return `${ctDateStr(0).slice(0, 4)}-01-01`;
+  }
+
+  type DatePreset =
+    | 'today' | 'yesterday'
+    | 'week_to_date' | 'last_week'
+    | 'last_3_weeks'
+    | 'month_to_date' | 'last_month'
+    | 'last_3_months' | 'last_6_months' | 'last_12_months'
+    | 'year_to_date' | 'last_year'
+    | 'custom';
+
+  const PRESET_LABELS: Record<DatePreset, string> = {
+    today: 'Today',
+    yesterday: 'Yesterday',
+    week_to_date: 'Week to Date',
+    last_week: 'Last Week',
+    last_3_weeks: 'Last 3 Weeks',
+    month_to_date: 'Month to Date',
+    last_month: 'Last Month',
+    last_3_months: 'Last 3 Months',
+    last_6_months: 'Last 6 Months',
+    last_12_months: 'Last 12 Months',
+    year_to_date: 'Year to Date',
+    last_year: 'Last Year',
+    custom: 'Custom',
+  };
+
+  function presetToDates(preset: DatePreset): { start: string; end: string } {
+    const today = ctDateStr(0);
+    const yesterday = ctDateStr(1);
+    switch (preset) {
+      case 'today':         return { start: today, end: today };
+      case 'yesterday':     return { start: yesterday, end: yesterday };
+      case 'week_to_date':  return { start: startOfWeek(), end: today };
+      case 'last_week': {
+        const d = new Date();
+        const day = d.getDay();
+        const endOfLastWeek = new Date(d); endOfLastWeek.setDate(d.getDate() - day - 1);
+        const startOfLastWeek = new Date(endOfLastWeek); startOfLastWeek.setDate(endOfLastWeek.getDate() - 6);
+        const fmt = (x: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(x);
+        return { start: fmt(startOfLastWeek), end: fmt(endOfLastWeek) };
+      }
+      case 'last_3_weeks':  return { start: ctDateStr(21), end: today };
+      case 'month_to_date': return { start: startOfMonth(), end: today };
+      case 'last_month': {
+        const d = new Date();
+        const firstOfThisMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+        const lastOfLastMonth = new Date(firstOfThisMonth); lastOfLastMonth.setDate(0);
+        const firstOfLastMonth = new Date(lastOfLastMonth.getFullYear(), lastOfLastMonth.getMonth(), 1);
+        const fmt = (x: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(x);
+        return { start: fmt(firstOfLastMonth), end: fmt(lastOfLastMonth) };
+      }
+      case 'last_3_months':  return { start: ctDateStr(90), end: today };
+      case 'last_6_months':  return { start: ctDateStr(180), end: today };
+      case 'last_12_months': return { start: ctDateStr(365), end: today };
+      case 'year_to_date':   return { start: startOfYear(), end: today };
+      case 'last_year': {
+        const yr = parseInt(today.slice(0, 4), 10) - 1;
+        return { start: `${yr}-01-01`, end: `${yr}-12-31` };
+      }
+      case 'custom':
+      default:               return { start: ctDateStr(6), end: today }; // last 7 days
+    }
+  }
+
+  const [datePreset, setDatePreset] = useState<DatePreset>('custom');
+  const initialDates = presetToDates('custom');
+  const [filterStart, setFilterStart] = useState<string>(initialDates.start);
+  const [filterEnd, setFilterEnd] = useState<string>(initialDates.end);
+
+  function applyPreset(preset: DatePreset) {
+    setDatePreset(preset);
+    const { start, end } = presetToDates(preset);
+    setFilterStart(start);
+    setFilterEnd(end);
+  }
+
   // Staff date selector — defaults to YTD (matches old behavior)
   type StaffPeriod = 'today' | '7d' | '30d' | 'monthly' | 'ytd' | 'custom';
   const [staffPeriod, setStaffPeriod] = useState<StaffPeriod>('ytd');
@@ -614,8 +731,8 @@ export default function SalesRevenue() {
   const queryClient = useQueryClient();
 
   const dashQ = useQuery<DashboardResponse>({
-    queryKey: ['pos', 'dashboard'],
-    queryFn: () => api.get<DashboardResponse>('/pos/dashboard').then((r) => r.data),
+    queryKey: ['pos', 'dashboard', filterStart, filterEnd],
+    queryFn: () => api.get<DashboardResponse>(`/pos/dashboard?start=${filterStart}&end=${filterEnd}`).then((r) => r.data),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -653,7 +770,7 @@ export default function SalesRevenue() {
     queryKey: ['pos', 'analytics', analyticsDays],
     queryFn: () => api.get<AnalyticsResponse>(`/pos/analytics?days=${analyticsDays}`).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
-    enabled: tab === 'analytics',
+    enabled: tab === 'analytics' || tab === 'overview',
   });
 
   const inventoryQ = useQuery<InventoryResponse>({
@@ -690,7 +807,7 @@ export default function SalesRevenue() {
     queryKey: ['pos', 'reporting'],
     queryFn: () => api.get<ReportingResponse>('/pos/reporting').then((r) => r.data),
     staleTime: 30 * 60 * 1000,
-    enabled: tab === 'reporting' || tab === 'insights',
+    enabled: tab === 'reporting' || tab === 'insights' || tab === 'overview',
   });
 
   const insightsQ = useQuery<InsightsResponse>({
@@ -1291,11 +1408,95 @@ export default function SalesRevenue() {
         {/* ── OVERVIEW TAB ── */}
         {tab === 'overview' && (
           <div className="space-y-6">
+            {/* ── Date filter bar ── */}
+            <div className="bg-white rounded-xl border border-slate-200 px-5 py-4">
+              <div className="flex flex-wrap items-end gap-4">
+                {/* Preset dropdown */}
+                <div className="flex flex-col gap-1 min-w-[180px]">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Dates</label>
+                  <div className="relative">
+                    <select
+                      value={datePreset}
+                      onChange={(e) => applyPreset(e.target.value as DatePreset)}
+                      className="w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-8 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                    >
+                      {(Object.keys(PRESET_LABELS) as DatePreset[]).map((p) => (
+                        <option key={p} value={p}>{PRESET_LABELS[p]}</option>
+                      ))}
+                    </select>
+                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">▾</span>
+                  </div>
+                </div>
+
+                {/* Start date */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Start</label>
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={filterStart}
+                      onChange={(e) => {
+                        setFilterStart(e.target.value);
+                        setDatePreset('custom');
+                      }}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      aria-label="Start date"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-base">📅</span>
+                  </div>
+                </div>
+
+                {/* End date */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">End</label>
+                  <div className="relative">
+                    <input
+                      type="date"
+                      value={filterEnd}
+                      onChange={(e) => {
+                        setFilterEnd(e.target.value);
+                        setDatePreset('custom');
+                      }}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      aria-label="End date"
+                    />
+                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-base">📅</span>
+                  </div>
+                </div>
+
+                {/* Active range label */}
+                {filterStart && filterEnd && (
+                  <p className="text-xs text-slate-400 self-end pb-2.5">
+                    {new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {' – '}
+                    {new Date(filterEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </p>
+                )}
+              </div>
+            </div>
+
             {dashQ.isLoading && <LoadingState label="Loading sales data from Heartland…" />}
             {dashQ.isError && <ErrorState error={dashQ.error} />}
             {dashQ.data && (
               <>
-                {/* Revenue goal tracker */}
+                {/* ── Alerts + Notes row ── */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Alerts */}
+                  <AlertsPanel alerts={dashQ.data.alerts} onNavigate={setTab} />
+                  {/* Notes */}
+                  <NotesPanel />
+                </div>
+
+                {/* ── KPI metric cards (vs last year) ── */}
+                <KpiGrid data={dashQ.data} />
+
+                {/* ── Two-column: Net Sales by Hour + Top Performers ── */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <NetSalesByHourChart hourly={dashQ.data.hourly} />
+                  <TopPerformersPanel reportingData={reportingQ.data ?? null} analyticsData={analyticsQ.data ?? null} />
+                </div>
+
+                {/* ── Revenue goal tracker ── */}
                 <div className="bg-white rounded-lg border border-slate-200 p-5">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-slate-900">Revenue Goals</h3>
@@ -1315,7 +1516,7 @@ export default function SalesRevenue() {
                       const pct = Math.min(100, goals.daily > 0 ? Math.round((actual / goals.daily) * 100) : 0);
                       const onPace = actual >= goals.daily;
                       const hoursElapsed = new Date().getHours() + new Date().getMinutes() / 60;
-                      const pacedTarget = goals.daily * (hoursElapsed / 10); // assume 10hr store day
+                      const pacedTarget = goals.daily * (hoursElapsed / 10);
                       const pacing = actual >= pacedTarget ? 'on-pace' : 'behind';
                       return (
                         <div>
@@ -1379,12 +1580,6 @@ export default function SalesRevenue() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <StatCard label="Today" value={fmt(dashQ.data.today.totalAmount)} sub={`${dashQ.data.today.ticketCount} transactions`} icon={TrendingUp} color="blue" />
-                  <StatCard label="Last 7 Days" value={fmt(dashQ.data.last7Days.totalAmount)} sub={`${dashQ.data.last7Days.ticketCount} transactions`} icon={ShoppingBag} color="green" />
-                  <StatCard label="Last 30 Days" value={fmt(dashQ.data.last30Days.totalAmount)} sub={`${dashQ.data.last30Days.ticketCount} transactions`} icon={CreditCard} color="purple" />
-                  <StatCard label="Year to Date" value={fmt(dashQ.data.yearToDate.totalAmount)} sub={`${dashQ.data.yearToDate.ticketCount} transactions`} icon={TrendingUp} color="amber" />
-                </div>
                 <div className="bg-white rounded-lg border border-slate-200 p-4 text-xs text-slate-500">
                   Pulled from Heartland Retail payments (gross including 8.25% Denton sales tax). For tax-ready net revenue, use <em>Import from POS</em> in the CPA Tax Assistant.
                   {' '}Last sync: {relativeTime(dashQ.data.syncInfo?.lastSyncAt)}. Page loaded {new Date(dashQ.data.asOf).toLocaleTimeString()}.
@@ -2668,6 +2863,561 @@ export default function SalesRevenue() {
 }
 
 // ── Utility components ────────────────────────────────────────────────
+
+// ── KPI metric card with vs-last-year comparison ──────────────────────
+function KpiCard({
+  label,
+  value,
+  lyValue,
+  sub,
+  subLy,
+}: {
+  label: string;
+  value: string;
+  lyValue?: string;
+  sub?: string;
+  subLy?: string;
+}) {
+  // Compute % change from raw numbers passed as strings
+  const rawCurrent = parseFloat(value.replace(/[^0-9.-]/g, ''));
+  const rawLy = lyValue ? parseFloat(lyValue.replace(/[^0-9.-]/g, '')) : null;
+  const pctChange = rawLy != null && rawLy !== 0 ? ((rawCurrent - rawLy) / rawLy) * 100 : null;
+  const up = pctChange != null && pctChange >= 0;
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-2">
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+      <p className="text-2xl font-bold text-slate-900 leading-none">{value}</p>
+      {lyValue && (
+        <p className="text-xs text-slate-400">vs. <span className="text-slate-500 font-medium">{lyValue}</span></p>
+      )}
+      {sub && <p className="text-xs text-slate-400">{sub}</p>}
+      {subLy && <p className="text-[10px] text-slate-300">LY: {subLy}</p>}
+      {pctChange != null && (
+        <span className={`inline-flex items-center gap-1 self-start text-xs font-semibold px-2 py-0.5 rounded-full ${up ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+          {up ? '▲' : '▼'} {Math.abs(pctChange).toFixed(1)}%
+        </span>
+      )}
+    </div>
+  );
+}
+
+function KpiGrid({ data }: { data: DashboardResponse }) {
+  const ly = data.lastYear;
+
+  // Use selectedRange when a custom filter is active, otherwise fall back to today
+  const primary = data.selectedRange ?? data.today;
+  const lyPrimary = ly?.selectedRange ?? ly?.today;
+
+  const primaryTickets = primary.ticketCount;
+  const primaryAmount = primary.totalAmount;
+  const avgTicket = primaryTickets > 0 ? primaryAmount / primaryTickets : 0;
+  const lyTickets = lyPrimary?.ticketCount ?? 0;
+  const lyAmount = lyPrimary?.totalAmount ?? 0;
+  const lyAvgTicket = lyTickets > 0 ? lyAmount / lyTickets : 0;
+
+  // Derived: units sold (est. 1.5× tickets), units per ticket
+  const estUnits = primaryTickets * 1.5;
+  const lyEstUnits = lyTickets * 1.5;
+  const unitsPerTicket = primaryTickets > 0 ? estUnits / primaryTickets : 0;
+  const lyUnitsPerTicket = lyTickets > 0 ? lyEstUnits / lyTickets : 0;
+
+  // Range label for the first card
+  const rangeLabel = data.selectedRangeStart && data.selectedRangeEnd
+    ? `${new Date(data.selectedRangeStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(data.selectedRangeEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+    : 'Selected Period';
+
+  const metrics = [
+    {
+      label: 'Sales vs. Last Year',
+      value: fmtDec(primaryAmount),
+      lyValue: ly ? fmtDec(lyAmount) : undefined,
+      sub: rangeLabel,
+    },
+    {
+      label: 'Avg Transaction Value',
+      value: fmtDec(avgTicket),
+      lyValue: ly ? fmtDec(lyAvgTicket) : undefined,
+    },
+    {
+      label: '# of Tickets',
+      value: primaryTickets.toFixed(0),
+      lyValue: ly ? lyTickets.toFixed(0) : undefined,
+    },
+    {
+      label: 'Total Units Sold',
+      value: estUnits.toFixed(0),
+      lyValue: ly ? lyEstUnits.toFixed(0) : undefined,
+      sub: 'est. (1.5× tickets)',
+    },
+    {
+      label: 'Units / Transaction',
+      value: unitsPerTicket.toFixed(2),
+      lyValue: ly ? lyUnitsPerTicket.toFixed(2) : undefined,
+    },
+    {
+      label: 'Net Returns',
+      value: '$0',
+      lyValue: ly ? '$0' : undefined,
+      sub: 'not tracked in rollup',
+    },
+    {
+      label: 'Last 7 Days',
+      value: fmt(data.last7Days.totalAmount),
+      lyValue: ly ? fmt(ly.last7Days.totalAmount) : undefined,
+      sub: `${data.last7Days.ticketCount} tickets`,
+      subLy: ly ? `${ly.last7Days.ticketCount} tickets` : undefined,
+    },
+    {
+      label: 'Year to Date',
+      value: fmt(data.yearToDate.totalAmount),
+      lyValue: ly ? fmt(ly.yearToDate.totalAmount) : undefined,
+      sub: `${data.yearToDate.ticketCount} tickets`,
+      subLy: ly ? `${ly.yearToDate.ticketCount} tickets` : undefined,
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {metrics.map((m) => (
+        <KpiCard key={m.label} {...m} />
+      ))}
+    </div>
+  );
+}
+
+// ── Alerts panel ──────────────────────────────────────────────────────
+function AlertsPanel({
+  alerts,
+  onNavigate,
+}: {
+  alerts?: DashboardResponse['alerts'];
+  onNavigate: (tab: Tab) => void;
+}) {
+  const items: Array<{ msg: string; tab: Tab }> = [];
+  if (alerts?.openOrders && alerts.openOrders > 0) {
+    items.push({ msg: `There are ${alerts.openOrders} overdue purchase orders to be received.`, tab: 'purchasing' });
+  }
+  if (alerts?.lowStock && alerts.lowStock > 0) {
+    items.push({ msg: `There are ${alerts.lowStock} items with low stock (≤3 units).`, tab: 'inventory' });
+  }
+
+  return (
+    <div className={`rounded-xl border p-5 ${items.length > 0 ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-white'}`}>
+      <div className="flex items-center gap-2 mb-3">
+        <AlertCircle className={`w-4 h-4 ${items.length > 0 ? 'text-red-500' : 'text-slate-400'}`} />
+        <h3 className={`text-sm font-semibold ${items.length > 0 ? 'text-red-700' : 'text-slate-700'}`}>Alerts</h3>
+        {items.length > 0 && (
+          <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white">
+            {items.length}
+          </span>
+        )}
+      </div>
+      {items.length === 0 ? (
+        <p className="text-xs text-slate-400">No alerts — everything looks good.</p>
+      ) : (
+        <ul className="space-y-2">
+          {items.map((item, i) => (
+            <li key={i}>
+              <button
+                onClick={() => onNavigate(item.tab)}
+                className="w-full flex items-start gap-2 text-left group"
+              >
+                <span className="mt-0.5 flex-shrink-0 w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5" />
+                <span className="text-xs text-red-700 group-hover:underline leading-snug">{item.msg}</span>
+                <span className="ml-auto text-red-400 group-hover:text-red-600 flex-shrink-0">›</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// ── Notes panel (sticky, persisted in localStorage) ───────────────────
+interface DashNote {
+  id: string;
+  text: string;
+  createdAt: string;
+  done: boolean;
+}
+
+const NOTES_KEY = 'foot-solutions:dash-notes';
+
+function NotesPanel() {
+  const [notes, setNotes] = useState<DashNote[]>(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem(NOTES_KEY) ?? '[]') as DashNote[];
+    } catch { return []; }
+  });
+  const [draft, setDraft] = useState('');
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  function persist(next: DashNote[]) {
+    setNotes(next);
+    try { window.localStorage.setItem(NOTES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+
+  function addNote() {
+    const text = draft.trim();
+    if (!text) return;
+    persist([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString(), done: false }, ...notes]);
+    setDraft('');
+    textareaRef.current?.focus();
+  }
+
+  function toggleDone(id: string) {
+    persist(notes.map((n) => n.id === id ? { ...n, done: !n.done } : n));
+  }
+
+  function removeNote(id: string) {
+    persist(notes.filter((n) => n.id !== id));
+  }
+
+  const active = notes.filter((n) => !n.done);
+  const done = notes.filter((n) => n.done);
+
+  return (
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <StickyNote className="w-4 h-4 text-amber-500" />
+        <h3 className="text-sm font-semibold text-amber-800">Notes</h3>
+        {active.length > 0 && (
+          <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-white">
+            {active.length}
+          </span>
+        )}
+      </div>
+
+      {/* Active notes */}
+      {active.length > 0 && (
+        <ul className="space-y-1.5">
+          {active.map((n) => (
+            <li key={n.id} className="flex items-start gap-2 bg-white rounded-lg px-3 py-2 border border-amber-200 shadow-sm">
+              <input
+                type="checkbox"
+                checked={false}
+                onChange={() => toggleDone(n.id)}
+                className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer"
+                aria-label="Mark done"
+              />
+              <span className="flex-1 text-xs text-slate-700 leading-snug">{n.text}</span>
+              <button
+                onClick={() => removeNote(n.id)}
+                className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors"
+                aria-label="Remove note"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Done notes (collapsed) */}
+      {done.length > 0 && (
+        <ul className="space-y-1">
+          {done.map((n) => (
+            <li key={n.id} className="flex items-start gap-2 opacity-50">
+              <input
+                type="checkbox"
+                checked={true}
+                onChange={() => toggleDone(n.id)}
+                className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer"
+                aria-label="Unmark done"
+              />
+              <span className="flex-1 text-xs text-slate-500 line-through leading-snug">{n.text}</span>
+              <button
+                onClick={() => removeNote(n.id)}
+                className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors"
+                aria-label="Remove note"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Input */}
+      <div className="flex gap-2">
+        <textarea
+          ref={textareaRef}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } }}
+          placeholder="Add note… (Enter to save)"
+          rows={2}
+          className="flex-1 text-xs rounded-lg border border-amber-200 bg-white px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
+        />
+        <button
+          onClick={addNote}
+          disabled={!draft.trim()}
+          className="self-end px-3 py-2 text-xs font-medium rounded-lg bg-amber-400 text-white hover:bg-amber-500 disabled:opacity-40 transition"
+        >
+          Add
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Net Sales by Hour chart (current vs last year, SVG area chart) ────
+function NetSalesByHourChart({ hourly }: { hourly?: DashboardResponse['hourly'] }) {
+  const [view, setView] = useState<'both' | 'current' | 'lastYear'>('both');
+
+  const current = hourly?.today ?? Array(24).fill(0) as number[];
+  const lastYear = hourly?.lastYear ?? Array(24).fill(0) as number[];
+
+  const hourLabels = ['12am','1am','2am','3am','4am','5am','6am','7am','8am','9am','10am','11am',
+    '12pm','1pm','2pm','3pm','4pm','5pm','6pm','7pm','8pm','9pm','10pm','11pm'];
+
+  const W = 560, H = 200;
+  const pad = { top: 20, right: 12, bottom: 36, left: 44 };
+  const iW = W - pad.left - pad.right;
+  const iH = H - pad.top - pad.bottom;
+
+  const maxVal = Math.max(...current, ...lastYear, 1);
+  const niceMax = (() => {
+    if (maxVal <= 100) return Math.ceil(maxVal / 25) * 25;
+    if (maxVal <= 500) return Math.ceil(maxVal / 100) * 100;
+    if (maxVal <= 2000) return Math.ceil(maxVal / 250) * 250;
+    return Math.ceil(maxVal / 500) * 500;
+  })();
+
+  function toPoints(vals: number[]) {
+    return vals.map((v, i) => ({
+      x: pad.left + (i / 23) * iW,
+      y: pad.top + iH - (v / niceMax) * iH,
+    }));
+  }
+
+  function areaPath(pts: Array<{ x: number; y: number }>) {
+    const line = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const base = `L ${pts[pts.length - 1]!.x.toFixed(1)},${(pad.top + iH).toFixed(1)} L ${pts[0]!.x.toFixed(1)},${(pad.top + iH).toFixed(1)} Z`;
+    return `${line} ${base}`;
+  }
+
+  const curPts = toPoints(current);
+  const lyPts = toPoints(lastYear);
+
+  // Y ticks
+  const yTicks = [0, niceMax * 0.5, niceMax];
+  // X ticks: every 3 hours
+  const xTicks = [0, 3, 6, 9, 12, 15, 18, 21, 23];
+
+  const [hoverHour, setHoverHour] = useState<number | null>(null);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5">
+      <h3 className="text-sm font-semibold text-slate-900 mb-4 text-center">Net Sales by Hour</h3>
+      <div className="relative">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full"
+          preserveAspectRatio="xMidYMid meet"
+          onMouseLeave={() => setHoverHour(null)}
+        >
+          <defs>
+            <linearGradient id="hourCurGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#1e40af" stopOpacity="0.7" />
+              <stop offset="100%" stopColor="#1e40af" stopOpacity="0.05" />
+            </linearGradient>
+            <linearGradient id="hourLyGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#a855f7" stopOpacity="0.55" />
+              <stop offset="100%" stopColor="#a855f7" stopOpacity="0.05" />
+            </linearGradient>
+          </defs>
+
+          {/* Y gridlines */}
+          {yTicks.map((t, i) => {
+            const y = pad.top + iH - (t / niceMax) * iH;
+            return (
+              <g key={i}>
+                <line x1={pad.left} x2={pad.left + iW} y1={y} y2={y} stroke="#e2e8f0" strokeWidth={1} strokeDasharray={i === 0 ? '0' : '3,3'} />
+                <text x={pad.left - 6} y={y + 4} textAnchor="end" fontSize={9} fill="#94a3b8" fontFamily="monospace">
+                  {t >= 1000 ? `${(t / 1000).toFixed(0)}k` : t}
+                </text>
+              </g>
+            );
+          })}
+
+          {/* X axis */}
+          <line x1={pad.left} x2={pad.left + iW} y1={pad.top + iH} y2={pad.top + iH} stroke="#cbd5e1" strokeWidth={1} />
+          {xTicks.map((i) => {
+            const x = pad.left + (i / 23) * iW;
+            return (
+              <text key={i} x={x} y={pad.top + iH + 14} textAnchor="middle" fontSize={9} fill="#94a3b8">
+                {hourLabels[i]}
+              </text>
+            );
+          })}
+
+          {/* Last year area */}
+          {(view === 'both' || view === 'lastYear') && (
+            <>
+              <path d={areaPath(lyPts)} fill="url(#hourLyGrad)" />
+              <path d={lyPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                fill="none" stroke="#a855f7" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          )}
+
+          {/* Current area (on top) */}
+          {(view === 'both' || view === 'current') && (
+            <>
+              <path d={areaPath(curPts)} fill="url(#hourCurGrad)" />
+              <path d={curPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')}
+                fill="none" stroke="#1e40af" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+            </>
+          )}
+
+          {/* Hover crosshair + tooltip */}
+          {hoverHour !== null && (() => {
+            const x = pad.left + (hoverHour / 23) * iW;
+            const curVal = current[hoverHour] ?? 0;
+            const lyVal = lastYear[hoverHour] ?? 0;
+            const ttW = 130, ttH = 52;
+            const ttX = x + 10 + ttW > W ? x - ttW - 10 : x + 10;
+            const ttY = pad.top;
+            return (
+              <g pointerEvents="none">
+                <line x1={x} x2={x} y1={pad.top} y2={pad.top + iH} stroke="#94a3b8" strokeWidth={1} strokeDasharray="3,3" />
+                <rect x={ttX} y={ttY} width={ttW} height={ttH} rx={5} fill="#0f172a" opacity={0.92} />
+                <text x={ttX + 8} y={ttY + 15} fontSize={10} fill="#cbd5e1">{hourLabels[hoverHour]}</text>
+                <text x={ttX + 8} y={ttY + 30} fontSize={10} fill="#60a5fa">Current: {fmtDec(curVal)}</text>
+                <text x={ttX + 8} y={ttY + 44} fontSize={10} fill="#c084fc">Last yr: {fmtDec(lyVal)}</text>
+              </g>
+            );
+          })()}
+
+          {/* Invisible hover zones */}
+          {Array.from({ length: 24 }, (_, i) => {
+            const x = pad.left + (i / 23) * iW;
+            const slotW = iW / 23;
+            return (
+              <rect
+                key={i}
+                x={x - slotW / 2}
+                y={pad.top}
+                width={slotW}
+                height={iH}
+                fill="transparent"
+                onMouseEnter={() => setHoverHour(i)}
+                style={{ cursor: 'crosshair' }}
+              />
+            );
+          })}
+        </svg>
+      </div>
+
+      {/* Legend / toggle buttons */}
+      <div className="flex justify-center gap-3 mt-3">
+        <button
+          onClick={() => setView(view === 'current' ? 'both' : 'current')}
+          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'lastYear' ? 'bg-slate-100 text-slate-400' : 'bg-blue-700 text-white shadow-sm'}`}
+        >
+          Current
+        </button>
+        <button
+          onClick={() => setView(view === 'lastYear' ? 'both' : 'lastYear')}
+          className={`px-4 py-1.5 rounded-full text-xs font-semibold transition ${view === 'current' ? 'bg-slate-100 text-slate-400' : 'bg-purple-600 text-white shadow-sm'}`}
+        >
+          Last Year
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Top Performers panel (brands by net sales from reporting data) ────
+function TopPerformersPanel({
+  reportingData,
+  analyticsData,
+}: {
+  reportingData?: ReportingResponse | null;
+  analyticsData?: AnalyticsResponse | null;
+}) {
+  type SortKey = 'netSales' | 'qty';
+  const [sortBy, setSortBy] = useState<SortKey>('netSales');
+
+  // Build rows from reporting brand data (YTD net sales + qty)
+  const rows = useMemo(() => {
+    if (!reportingData?.brandRows) return [];
+    return reportingData.brandRows
+      .filter((r) => ((r['source_sales.net_sales'] as number) ?? 0) > 0)
+      .map((r) => ({
+        brand: String(r['item.custom@brand'] ?? '(unknown)'),
+        netSales: (r['source_sales.net_sales'] as number) ?? 0,
+        qty: (r['source_sales.net_qty_sold'] as number) ?? 0,
+        transactions: (r['source_sales.transaction_count'] as number) ?? 0,
+      }))
+      .sort((a, b) => sortBy === 'netSales' ? b.netSales - a.netSales : b.qty - a.qty)
+      .slice(0, 10);
+  }, [reportingData, sortBy]);
+
+  // Top staff from analytics (today's bySalesRep)
+  const topStaff = analyticsData?.bySalesRep?.[0];
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-4">
+      {/* Top staff performer banner */}
+      {topStaff && (
+        <div className="flex items-center gap-3 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+          <Trophy className="w-5 h-5 text-amber-500 flex-shrink-0" />
+          <div>
+            <p className="text-xs text-amber-600 font-medium uppercase tracking-wide">Top Performer Today</p>
+            <p className="text-sm font-bold text-slate-900">{topStaff.name}</p>
+          </div>
+          <p className="ml-auto text-sm font-bold text-amber-700">{fmt(topStaff.amount)}</p>
+        </div>
+      )}
+
+      {/* Brand table */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-slate-900">Top Performers</h3>
+          <p className="text-[10px] text-slate-400">YTD · from Reporting</p>
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-xs text-slate-400 py-4 text-center">Load the Reporting tab first to populate brand data.</p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-slate-100">
+                <th className="text-left py-2 text-slate-500 font-semibold uppercase tracking-wide text-[10px]">Vendor</th>
+                <th
+                  className={`text-right py-2 font-semibold uppercase tracking-wide text-[10px] cursor-pointer select-none ${sortBy === 'qty' ? 'text-blue-600' : 'text-slate-500'}`}
+                  onClick={() => setSortBy('qty')}
+                >
+                  QTY {sortBy === 'qty' && '↓'}
+                </th>
+                <th
+                  className={`text-right py-2 font-semibold uppercase tracking-wide text-[10px] cursor-pointer select-none ${sortBy === 'netSales' ? 'text-blue-600' : 'text-slate-500'}`}
+                  onClick={() => setSortBy('netSales')}
+                >
+                  Net Sales {sortBy === 'netSales' && '↓'}
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50">
+              {rows.map((r, i) => (
+                <tr key={r.brand} className={i === 0 ? 'bg-amber-50' : 'hover:bg-slate-50'}>
+                  <td className="py-2 font-medium text-slate-800">
+                    {i === 0 && <span className="mr-1 text-amber-500">★</span>}
+                    {r.brand}
+                  </td>
+                  <td className="py-2 text-right text-slate-600">{r.qty.toLocaleString()}</td>
+                  <td className="py-2 text-right font-semibold text-slate-800">{fmt(r.netSales)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function LoadingState({ label }: { label: string }) {
   return (

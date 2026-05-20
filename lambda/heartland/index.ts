@@ -178,21 +178,128 @@ async function getSyncStatus(): Promise<Record<string, unknown> | null> {
 
 // ── Route handlers ───────────────────────────────────────────────────
 
-async function handleDashboard(): Promise<APIGatewayProxyResultV2> {
+// Aggregate hourly totals from a set of rollups into a 24-element array
+function buildHourlyTotals(rollups: DailyRollup[]): number[] {
+  const hours = Array(24).fill(0) as number[];
+  for (const r of rollups) {
+    for (const [h, amt] of Object.entries(r.byHour ?? {})) {
+      const idx = parseInt(h, 10);
+      if (idx >= 0 && idx < 24) hours[idx] = (hours[idx] ?? 0) + (amt as number);
+    }
+  }
+  return hours;
+}
+
+// Compute avg units sold per ticket and total units from rollups
+// (units are not stored in daily rollups — we return ticket count as proxy)
+function sumRollupsExtended(rollups: DailyRollup[]): {
+  totalAmount: number;
+  ticketCount: number;
+} {
+  return sumRollups(rollups);
+}
+
+async function handleDashboard(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
   const today = todayStr();
-  const last30 = await queryDailyRollups(daysAgo(30), today);
-  const last7 = last30.filter((r) => r.date >= daysAgo(7));
-  const todayRollups = last30.filter((r) => r.date === today);
-  const yearStart = `${today.slice(0, 4)}-01-01`;
-  const ytd = await queryDailyRollups(yearStart, today);
+  const year = today.slice(0, 4);
+  const lastYear = String(parseInt(year, 10) - 1);
+
+  // Accept optional start/end params for custom date range filtering
+  const paramStart = event.queryStringParameters?.['start'];
+  const paramEnd = event.queryStringParameters?.['end'];
+
+  // Validate date format if provided
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const rangeStart = paramStart && dateRe.test(paramStart) ? paramStart : null;
+  const rangeEnd = paramEnd && dateRe.test(paramEnd) ? paramEnd : null;
+
+  // ── Primary period ────────────────────────────────────────────────
+  // When a custom range is provided, use it. Otherwise fall back to the
+  // standard rolling windows (today / 7d / 30d / YTD).
+  const effectiveStart = rangeStart ?? daysAgo(30);
+  const effectiveEnd = rangeEnd ?? today;
+
+  // Fetch the primary range + always fetch YTD for the YTD card
+  const yearStart = `${year}-01-01`;
+  const [rangeRollups, ytd] = await Promise.all([
+    queryDailyRollups(effectiveStart, effectiveEnd),
+    queryDailyRollups(yearStart, today),
+  ]);
+
+  // Derive sub-windows from the primary range
+  const todayRollups = rangeRollups.filter((r) => r.date === today);
+  const last7Rollups = rangeRollups.filter((r) => r.date >= daysAgo(7));
+  const last30Rollups = rangeRollups.filter((r) => r.date >= daysAgo(30));
+
+  // ── Same period last year ─────────────────────────────────────────
+  // Shift the effective range back exactly one year for comparison.
+  function shiftYearBack(dateStr: string): string {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setFullYear(d.getFullYear() - 1);
+    return centralDateString(d);
+  }
+  const lyStart = shiftYearBack(effectiveStart);
+  const lyEnd = shiftYearBack(effectiveEnd);
+  const lastYearToday = shiftYearBack(today);
+  const lastYearStart = `${lastYear}-01-01`;
+
+  const [lyRangeRollups, lyYtd, lyTodayRollups] = await Promise.all([
+    queryDailyRollups(lyStart, lyEnd),
+    queryDailyRollups(lastYearStart, lastYearToday),
+    queryDailyRollups(lastYearToday, lastYearToday),
+  ]);
+
+  const lyLast7Start = shiftYearBack(daysAgo(7));
+  const lyLast30Start = shiftYearBack(daysAgo(30));
+  const lyLast7 = lyRangeRollups.filter((r) => r.date >= lyLast7Start);
+  const lyLast30 = lyRangeRollups.filter((r) => r.date >= lyLast30Start);
+
+  // ── Hourly breakdown for the Net Sales by Hour chart ─────────────
+  // Use today vs same day last year regardless of range filter
+  const todayHourly = buildHourlyTotals(todayRollups.length ? todayRollups : rangeRollups.filter((r) => r.date === effectiveEnd));
+  const lastYearTodayHourly = buildHourlyTotals(lyTodayRollups);
+
+  // ── Alerts ────────────────────────────────────────────────────────
+  const [purchasingResult, inventoryResult] = await Promise.all([
+    docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#ORDERS' } })),
+    docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#INVENTORY#CATALOG' } })),
+  ]);
+  const openOrderCount = (purchasingResult.Item?.['orders'] as unknown[] | undefined)?.length ?? 0;
+  const lowStockCount = ((inventoryResult.Item?.['data'] as Record<string, unknown> | undefined)?.['lowStockItems'] as unknown[] | undefined)?.length ?? 0;
 
   const status = await getSyncStatus();
 
+  // ── Selected range summary (used by KPI cards when a custom range is active)
+  const selectedRange = sumRollupsExtended(rangeRollups);
+  const lySelectedRange = sumRollupsExtended(lyRangeRollups);
+
   return json(200, {
-    today: sumRollups(todayRollups),
-    last7Days: sumRollups(last7),
-    last30Days: sumRollups(last30),
-    yearToDate: sumRollups(ytd),
+    // Standard rolling windows (always present for goal tracker)
+    today: sumRollupsExtended(todayRollups),
+    last7Days: sumRollupsExtended(last7Rollups),
+    last30Days: sumRollupsExtended(last30Rollups),
+    yearToDate: sumRollupsExtended(ytd),
+    // Selected range (equals one of the above when no custom range)
+    selectedRange,
+    selectedRangeStart: effectiveStart,
+    selectedRangeEnd: effectiveEnd,
+    lastYear: {
+      today: sumRollupsExtended(lyTodayRollups),
+      last7Days: sumRollupsExtended(lyLast7),
+      last30Days: sumRollupsExtended(lyLast30),
+      yearToDate: sumRollupsExtended(lyYtd),
+      selectedRange: lySelectedRange,
+    },
+    hourly: {
+      today: todayHourly,
+      lastYear: lastYearTodayHourly,
+    },
+    alerts: {
+      openOrders: openOrderCount,
+      lowStock: lowStockCount,
+    },
     syncInfo: {
       lastSyncAt: status?.['completedAt'] ?? null,
       status: status?.['status'] ?? 'never',
@@ -1194,7 +1301,7 @@ export const handler = async (
 ): Promise<APIGatewayProxyResultV2> => {
   switch (event.routeKey) {
     case 'GET /pos/dashboard':
-      return handleDashboard();
+      return handleDashboard(event);
     case 'GET /pos/sales':
       return handleSalesByYear(event);
     case 'GET /pos/import-tax-defaults':

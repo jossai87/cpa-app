@@ -1,114 +1,101 @@
 # Foot Solutions Management Platform
 
-Serverless management app for the Foot Solutions franchise — Denton County, Texas.
+Serverless management app for the Foot Solutions franchise — Flower Mound, TX.
 
-**Stack:** React · Vite · Tailwind · shadcn/ui · AWS CDK v2 · Lambda · API Gateway · Cognito · Bedrock Nova 2 Lite · BDA · DynamoDB · S3 · CloudFront · Secrets Manager
+**Stack:** React · Vite · Tailwind · AWS CDK v2 · Lambda · API Gateway · Cognito · Bedrock · DynamoDB · S3 · CloudFront · Secrets Manager
 
 ---
 
 ## Prerequisites
 
 ```bash
-node --version    # 20.x LTS required
-npm --version     # 10.x (bundled with Node 20)
-aws --version     # AWS CLI v2
-cdk --version     # AWS CDK v2
+node --version   # 20.x LTS
+aws --version    # AWS CLI v2
 ```
 
-Install CDK globally if you haven't:
-
-```bash
-npm install -g aws-cdk
-```
-
-Configure your AWS credentials:
+Configure AWS credentials (one-time):
 
 ```bash
 aws configure
-# then verify:
-aws sts get-caller-identity
+aws sts get-caller-identity   # verify
 ```
 
 ---
 
-## Install
+## Project Structure
 
-```bash
-# Frontend
-cd frontend && npm install
-
-# Lambda handlers
-cd lambdas && npm install
-
-# CDK infrastructure
-cd infrastructure && npm install
+```
+/                  ← React frontend (Vite)
+/lambda            ← Lambda handlers (TypeScript)
+/infrastructure    ← AWS CDK stack
+/documents         ← Local reference docs (not deployed)
 ```
 
 ---
 
-## Run Locally
-
-**1. Set up your environment variables:**
+## Install Everything
 
 ```bash
-cd frontend
+npm install                        # frontend
+npm install --prefix lambda        # lambda handlers
+npm install --prefix infrastructure  # CDK
+```
+
+---
+
+## Local Development
+
+**1. Create your env file** (root of project):
+
+```bash
 cp .env.example .env.local
 ```
 
-Fill in `.env.local` with values from your deployed stack (or a dev stack):
+Fill in `.env.local` with values from your deployed stack:
 
 ```env
 VITE_API_URL=https://<api-id>.execute-api.us-east-1.amazonaws.com/prod
+VITE_APP_URL=https://<your-cloudfront-or-localhost>
 VITE_COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
 VITE_COGNITO_CLIENT_ID=XXXXXXXXXXXXXXXXXXXXXXXXXX
-VITE_COGNITO_REGION=us-east-1
+VITE_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
 ```
 
 **2. Start the dev server:**
 
 ```bash
-cd frontend
 npm run dev
 ```
 
-App runs at `http://localhost:5173`. API calls are proxied to your API Gateway URL via the Vite dev server config — no CORS issues locally.
+App runs at `http://localhost:3000`.
 
 ---
 
-## CDK Deployment
+## Deployment
 
-**Bootstrap (one-time per AWS account/region):**
-
-```bash
-cd infrastructure
-cdk bootstrap aws://<ACCOUNT_ID>/us-east-1
-```
-
-**Deploy everything:**
+### Bootstrap (one-time per AWS account/region)
 
 ```bash
 cd infrastructure
-cdk deploy FootSolutionsStack
+npx cdk bootstrap aws://<ACCOUNT_ID>/us-east-1
 ```
 
-CDK will print outputs when complete — copy these into your `.env.local`:
+---
 
-```
-FootSolutionsStack.ApiUrl              = https://...
-FootSolutionsStack.UserPoolId          = us-east-1_...
-FootSolutionsStack.UserPoolClientId    = ...
-FootSolutionsStack.CloudFrontUrl       = https://...
-FootSolutionsStack.S3BucketName        = ...
-FootSolutionsStack.CloudFrontDistId    = ...
-```
+### Full Deploy (infrastructure + frontend)
 
-**Deploy frontend to S3 + invalidate CloudFront:**
+Builds lambdas, deploys CDK stack, builds frontend, syncs to S3, and invalidates CloudFront — all in sequence:
 
 ```bash
-cd frontend && npm run build
+# 1. Deploy infrastructure (lambdas are bundled by CDK automatically)
+cd infrastructure && npx cdk deploy FootSolutionsStack --require-approval never
+
+# 2. Build and deploy frontend
+cd ..
+npm run build
 
 BUCKET=<FootSolutionsStack.S3BucketName>
-DIST=<FootSolutionsStack.CloudFrontDistId>
+DIST_ID=<FootSolutionsStack.CloudFrontDistId>
 
 aws s3 sync dist/ s3://$BUCKET/ --delete \
   --cache-control "public, max-age=31536000, immutable"
@@ -116,34 +103,120 @@ aws s3 sync dist/ s3://$BUCKET/ --delete \
 aws s3 cp dist/index.html s3://$BUCKET/index.html \
   --cache-control "no-cache, no-store, must-revalidate"
 
-aws cloudfront create-invalidation --distribution-id $DIST --paths "/*"
+aws cloudfront create-invalidation \
+  --distribution-id $DIST_ID \
+  --paths "/*"
 ```
 
-**Tear down:**
+CDK outputs after deploy — copy these into `.env.local`:
 
-```bash
-cd infrastructure
-cdk destroy FootSolutionsStack
 ```
-
-> ⚠️ This deletes all resources including DynamoDB data. Not reversible.
+FootSolutionsStack.ApiUrl            = https://...
+FootSolutionsStack.UserPoolId        = us-east-1_...
+FootSolutionsStack.UserPoolClientId  = ...
+FootSolutionsStack.CloudFrontUrl     = https://...
+FootSolutionsStack.S3BucketName      = ...
+FootSolutionsStack.CloudFrontDistId  = ...
+```
 
 ---
 
-## Loading Credentials into Secrets Manager
+### Frontend-Only Deploy
 
-Run once per credential after deploying:
+Use this when you've only changed React/UI code and don't need to touch the backend:
+
+```bash
+npm run build
+
+BUCKET=<FootSolutionsStack.S3BucketName>
+DIST_ID=<FootSolutionsStack.CloudFrontDistId>
+
+aws s3 sync dist/ s3://$BUCKET/ --delete \
+  --cache-control "public, max-age=31536000, immutable"
+
+aws s3 cp dist/index.html s3://$BUCKET/index.html \
+  --cache-control "no-cache, no-store, must-revalidate"
+
+aws cloudfront create-invalidation \
+  --distribution-id $DIST_ID \
+  --paths "/*"
+```
+
+---
+
+### Infrastructure-Only Deploy
+
+Use this when you've changed Lambda code, CDK stack, or environment config:
+
+```bash
+cd infrastructure
+npx cdk deploy FootSolutionsStack --require-approval never
+```
+
+---
+
+## Credentials Vault
+
+Credentials are stored in AWS Secrets Manager under the prefix `foot-solutions/credentials/`.
+The vault page lists them automatically — just add a secret and refresh.
+
+**Add a new credential:**
 
 ```bash
 aws secretsmanager create-secret \
-  --name "foot-solutions/credentials/global-payments" \
-  --secret-string '{"name":"Global Payments","url":"","username":"flowermound@footsolutions.com","password":"Foot1000$"}'
+  --name "foot-solutions/credentials/<slug>" \
+  --region us-east-1 \
+  --secret-string '{
+    "name": "Display Name",
+    "url": "https://example.com",
+    "username": "user@example.com",
+    "password": "your-password"
+  }'
 ```
+
+**Update an existing credential's password:**
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id "foot-solutions/credentials/<slug>" \
+  --region us-east-1 \
+  --secret-string '{
+    "name": "Display Name",
+    "url": "https://example.com",
+    "username": "user@example.com",
+    "password": "new-password"
+  }'
+```
+
+**Example — add the corporate Gmail:**
+
+```bash
+aws secretsmanager create-secret \
+  --name "foot-solutions/credentials/gmail-corporate" \
+  --region us-east-1 \
+  --secret-string '{
+    "name": "Foot Solutions Corporate Gmail",
+    "url": "https://mail.google.com",
+    "username": "NancyandJustin@footsolutions.com",
+    "password": "YOUR_TEMP_PW"
+  }'
+```
+
+---
+
+## Tear Down
+
+```bash
+cd infrastructure
+npx cdk destroy FootSolutionsStack
+```
+
+> ⚠️ Deletes all AWS resources including DynamoDB data. Not reversible.
 
 ---
 
 ## Security Notes
 
 - Never commit `.env.local` — it's in `.gitignore`
-- Never commit `foot-solutions-buildout-plan.md` to a public repo (contains credentials)
-- Passwords are never stored in DynamoDB or React state — Secrets Manager only
+- Never commit `foot-solutions-buildout-plan.md` to a public repo
+- Passwords live in Secrets Manager only — never in DynamoDB or React state
