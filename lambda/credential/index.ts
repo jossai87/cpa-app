@@ -6,6 +6,7 @@ import {
   SecretsManagerClient,
   ListSecretsCommand,
   PutSecretValueCommand,
+  CreateSecretCommand,
 } from '@aws-sdk/client-secrets-manager';
 import { redact } from '../shared/redact';
 
@@ -151,34 +152,75 @@ async function handleCopyCredential(
   }
 }
 
-async function handleUpdateCredential(
+async function handleCreateCredential(
   event: APIGatewayProxyEventV2WithJWTAuthorizer
 ): Promise<APIGatewayProxyResultV2> {
-  const id = event.pathParameters?.id;
-  if (!id) {
-    return json(400, { error: 'Credential ID is required' });
-  }
+  if (!event.body) return json(400, { error: 'Request body is required' });
 
-  if (!event.body) {
-    return json(400, { error: 'Request body is required' });
-  }
-
-  let body: { password?: string };
+  let body: { name?: string; url?: string; username?: string; password?: string; slug?: string };
   try {
-    body = JSON.parse(event.body) as { password?: string };
+    body = JSON.parse(event.body) as typeof body;
   } catch {
     return json(400, { error: 'Invalid JSON in request body' });
   }
 
-  if (!body.password || body.password.length < 8) {
+  if (!body.name?.trim()) return json(400, { error: 'name is required' });
+  if (!body.password?.trim()) return json(400, { error: 'password is required' });
+
+  // Derive slug from name if not provided
+  const slug = (body.slug?.trim() || body.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+  const secretId = `${SECRET_PATH_PREFIX}${slug}`;
+
+  const secretValue: SecretValue = {
+    name: body.name.trim(),
+    url: body.url?.trim() ?? '',
+    username: body.username?.trim() ?? '',
+    password: body.password.trim(),
+  };
+
+  try {
+    await smClient.send(new CreateSecretCommand({
+      Name: secretId,
+      SecretString: JSON.stringify(secretValue),
+    }));
+  } catch (err) {
+    const error = err as Error & { name?: string };
+    if (error.name === 'ResourceExistsException') {
+      return json(409, { error: `A credential with slug "${slug}" already exists. Choose a different name.` });
+    }
+    console.error('CreateSecret failed:', error.message);
+    return json(500, { error: `Failed to create credential: ${error.message}` });
+  }
+
+  return json(201, { message: 'Credential created', id: slug });
+}
+
+async function handleUpdateCredential(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
+  const id = event.pathParameters?.id;
+  if (!id) return json(400, { error: 'Credential ID is required' });
+  if (!event.body) return json(400, { error: 'Request body is required' });
+
+  let body: { name?: string; url?: string; username?: string; password?: string };
+  try {
+    body = JSON.parse(event.body) as typeof body;
+  } catch {
+    return json(400, { error: 'Invalid JSON in request body' });
+  }
+
+  // At least one field must be provided
+  if (!body.name && !body.url && !body.username && !body.password) {
+    return json(400, { error: 'At least one field (name, url, username, password) is required' });
+  }
+  if (body.password !== undefined && body.password.length < 8) {
     return json(400, { error: 'password must be at least 8 characters', field: 'password' });
   }
 
-  console.log('Updating credential:', JSON.stringify(redact({ id, password: body.password })));
+  console.log('Updating credential:', JSON.stringify(redact({ id, ...body })));
 
   const secretId = `${SECRET_PATH_PREFIX}${id}`;
 
-  // Read existing secret to preserve name, url, username
   let existing: SecretValue;
   try {
     existing = await getSecretViaExtension(secretId);
@@ -191,28 +233,26 @@ async function handleUpdateCredential(
     return json(502, { error: 'Failed to read existing credential' });
   }
 
-  // Merge new password while preserving other fields
+  // Merge — only overwrite fields that were provided
   const updated: SecretValue = {
-    name: existing.name,
-    url: existing.url,
-    username: existing.username,
-    password: body.password,
+    name:     body.name?.trim()     ?? existing.name,
+    url:      body.url?.trim()      ?? existing.url,
+    username: body.username?.trim() ?? existing.username,
+    password: body.password?.trim() ?? existing.password,
   };
 
   try {
-    await smClient.send(
-      new PutSecretValueCommand({
-        SecretId: secretId,
-        SecretString: JSON.stringify(updated),
-      })
-    );
+    await smClient.send(new PutSecretValueCommand({
+      SecretId: secretId,
+      SecretString: JSON.stringify(updated),
+    }));
   } catch (err) {
     const error = err as Error;
     console.error(`PutSecretValue failed for ${id}:`, error.message);
     return json(500, { error: `Failed to update credential: ${error.message}` });
   }
 
-  return json(200, { message: 'Password updated successfully' });
+  return json(200, { message: 'Credential updated successfully' });
 }
 
 // ── Main Handler ─────────────────────────────────────────────────────
@@ -223,6 +263,8 @@ export const handler = async (
   switch (event.routeKey) {
     case 'GET /credentials':
       return handleListCredentials();
+    case 'POST /credentials':
+      return handleCreateCredential(event);
     case 'POST /credentials/{id}/copy':
       return handleCopyCredential(event);
     case 'PUT /credentials/{id}':

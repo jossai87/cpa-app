@@ -96,9 +96,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     try {
-      await amplifySignOut({ global: true });
+      // Clear local Amplify session first
+      await amplifySignOut({ global: false });
+    } catch {
+      // Ignore — we still want to redirect
     } finally {
       setUser(null);
+      // Redirect through Cognito hosted UI logout to clear the session cookie.
+      // Without this, Cognito auto-logs the user back in immediately.
+      const domain = import.meta.env.VITE_COGNITO_DOMAIN as string;
+      const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID as string;
+      const logoutUri = encodeURIComponent((import.meta.env.VITE_APP_URL as string) + '/');
+      window.location.href = `https://${domain}/logout?client_id=${clientId}&logout_uri=${logoutUri}`;
     }
   }, []);
 

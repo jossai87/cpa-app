@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo } from 'react';
 import { Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -630,6 +630,7 @@ type Tab = 'overview' | 'analytics' | 'inventory' | 'staff' | 'purchasing' | 're
 export default function SalesRevenue() {
   const [tab, setTab] = useState<Tab>('overview');
   const [analyticsDays, setAnalyticsDays] = useState(7);
+  const [stockBrandFilter, setStockBrandFilter] = useState('');
 
   // ── Overview date filter ──────────────────────────────────────────
   // Helper: YYYY-MM-DD string for a date N days ago (Central Time)
@@ -831,74 +832,10 @@ export default function SalesRevenue() {
     enabled: tab === 'insights',
   });
 
-  // Vendor account status — persisted in localStorage so it survives page refreshes
-  const ACCOUNTS_KEY = 'foot-solutions:vendor-accounts';
-  const DISCONTINUED_KEY = 'foot-solutions:vendor-discontinued';
+  // ── Vendor settings — persisted in DynamoDB via API ─────────────
+  // Replaces the old localStorage approach so state survives redeployments
+  // and is consistent across all browsers and devices.
 
-  const [activeAccounts, setActiveAccounts] = useState<Set<string>>(() => {
-    try {
-      const saved = window.localStorage.getItem(ACCOUNTS_KEY);
-      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-
-  const [discontinuedVendors, setDiscontinuedVendors] = useState<Set<string>>(() => {
-    try {
-      const saved = window.localStorage.getItem(DISCONTINUED_KEY);
-      return saved ? new Set(JSON.parse(saved) as string[]) : new Set();
-    } catch {
-      return new Set();
-    }
-  });
-
-  function handleVendorAccountToggle(key: string, vendorName: string, checked: boolean) {
-    if (checked) {
-      // Confirm before marking active
-      if (!window.confirm(`Mark "${vendorName}" as having an active account?`)) return;
-      setActiveAccounts((prev) => {
-        const next = new Set(prev);
-        next.add(key);
-        try { window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
-        return next;
-      });
-    } else {
-      // Confirm before removing
-      if (!window.confirm(`Remove the active account mark for "${vendorName}"?`)) return;
-      setActiveAccounts((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        try { window.localStorage.setItem(ACCOUNTS_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
-        return next;
-      });
-    }
-  }
-
-  function handleDiscontinuedToggle(key: string, vendorName: string) {
-    const isCurrentlyDiscontinued = discontinuedVendors.has(key);
-    if (isCurrentlyDiscontinued) {
-      if (!window.confirm(`Remove "will discontinue" flag from "${vendorName}"?`)) return;
-      setDiscontinuedVendors((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        try { window.localStorage.setItem(DISCONTINUED_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
-        return next;
-      });
-    } else {
-      if (!window.confirm(`Mark "${vendorName}" as will discontinue?`)) return;
-      setDiscontinuedVendors((prev) => {
-        const next = new Set(prev);
-        next.add(key);
-        try { window.localStorage.setItem(DISCONTINUED_KEY, JSON.stringify([...next])); } catch { /* ignore */ }
-        return next;
-      });
-    }
-  }
-
-  // ── Vendor card overrides (persisted in localStorage) ───────────
-  // Allows editing display name, phone, email, website, rep fields per vendor.
-  const VENDOR_OVERRIDES_KEY = 'foot-solutions:vendor-overrides';
   interface VendorOverride {
     displayName?: string;
     phone?: string;
@@ -909,28 +846,6 @@ export default function SalesRevenue() {
     repEmail?: string;
     repTitle?: string;
   }
-  const [vendorOverrides, setVendorOverrides] = useState<Record<number, VendorOverride>>(() => {
-    try { return JSON.parse(window.localStorage.getItem(VENDOR_OVERRIDES_KEY) ?? '{}') as Record<number, VendorOverride>; }
-    catch { return {}; }
-  });
-  const [editingVendorCard, setEditingVendorCard] = useState<number | null>(null);
-  const [vendorCardDraft, setVendorCardDraft] = useState<VendorOverride>({});
-
-  function persistVendorOverrides(next: Record<number, VendorOverride>) {
-    setVendorOverrides(next);
-    try { window.localStorage.setItem(VENDOR_OVERRIDES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-  }
-  function saveVendorCard(vendorId: number) {
-    persistVendorOverrides({ ...vendorOverrides, [vendorId]: vendorCardDraft });
-    setEditingVendorCard(null);
-  }
-  function resetVendorCard(vendorId: number) {
-    const next = { ...vendorOverrides };
-    delete next[vendorId];
-    persistVendorOverrides(next);
-    setEditingVendorCard(null);
-  }
-  const CUSTOM_CONTACTS_KEY = 'foot-solutions:vendor-custom-contacts';
   interface VendorContact {
     id: string;
     name?: string;
@@ -938,11 +853,107 @@ export default function SalesRevenue() {
     phone?: string;
     email?: string;
   }
-  const [customContacts, setCustomContacts] = useState<Record<number, VendorContact[]>>(() => {
-    try {
-      return JSON.parse(window.localStorage.getItem(CUSTOM_CONTACTS_KEY) ?? '{}') as Record<number, VendorContact[]>;
-    } catch { return {}; }
+  interface VendorSettingsResponse {
+    activeAccounts: string[];
+    discontinuedVendors: string[];
+    contactedVendors: string[];
+    vendorOverrides: Record<string, VendorOverride>;
+    customContacts: Record<string, VendorContact[]>;
+    updatedAt: string | null;
+  }
+
+  const vendorSettingsQ = useQuery<VendorSettingsResponse>({
+    queryKey: ['pos', 'vendor-settings'],
+    queryFn: () => api.get<VendorSettingsResponse>('/pos/vendor-settings').then((r) => r.data),
+    staleTime: Infinity, // user-edited data — only refetch on explicit invalidation
   });
+
+  const vendorSettingsMutation = useMutation({
+    mutationFn: (payload: Partial<VendorSettingsResponse>) =>
+      api.put('/pos/vendor-settings', payload).then((r) => r.data),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['pos', 'vendor-settings'] });
+    },
+  });
+
+  // Derive local state from the query result (falls back to empty while loading)
+  const activeAccounts = new Set<string>(vendorSettingsQ.data?.activeAccounts ?? []);
+  const discontinuedVendors = new Set<string>(vendorSettingsQ.data?.discontinuedVendors ?? []);
+  const contactedVendors = new Set<string>(vendorSettingsQ.data?.contactedVendors ?? []);
+  // vendorOverrides keys come back as strings from JSON; cast to number-keyed for compat
+  const vendorOverrides: Record<number, VendorOverride> = Object.fromEntries(
+    Object.entries(vendorSettingsQ.data?.vendorOverrides ?? {}).map(([k, v]) => [Number(k), v])
+  );
+  const customContacts: Record<number, VendorContact[]> = Object.fromEntries(
+    Object.entries(vendorSettingsQ.data?.customContacts ?? {}).map(([k, v]) => [Number(k), v])
+  );
+
+  // Helper: build the full settings payload merging a partial change over current data
+  function buildSettingsUpdate(patch: Partial<VendorSettingsResponse>): Partial<VendorSettingsResponse> {
+    return {
+      activeAccounts: [...activeAccounts],
+      discontinuedVendors: [...discontinuedVendors],
+      contactedVendors: [...contactedVendors],
+      vendorOverrides: Object.fromEntries(Object.entries(vendorOverrides).map(([k, v]) => [String(k), v])),
+      customContacts: Object.fromEntries(Object.entries(customContacts).map(([k, v]) => [String(k), v])),
+      ...patch,
+    };
+  }
+
+  const [editingVendorCard, setEditingVendorCard] = useState<number | null>(null);
+  const [vendorCardDraft, setVendorCardDraft] = useState<VendorOverride>({});
+
+  function handleVendorAccountToggle(key: string, vendorName: string, checked: boolean) {
+    if (checked) {
+      if (!window.confirm(`Mark "${vendorName}" as having an active account?`)) return;
+      const next = new Set(activeAccounts);
+      next.add(key);
+      vendorSettingsMutation.mutate(buildSettingsUpdate({ activeAccounts: [...next] }));
+    } else {
+      if (!window.confirm(`Remove the active account mark for "${vendorName}"?`)) return;
+      const next = new Set(activeAccounts);
+      next.delete(key);
+      vendorSettingsMutation.mutate(buildSettingsUpdate({ activeAccounts: [...next] }));
+    }
+  }
+
+  function handleDiscontinuedToggle(key: string, vendorName: string) {
+    const isCurrentlyDiscontinued = discontinuedVendors.has(key);
+    if (isCurrentlyDiscontinued) {
+      if (!window.confirm(`Remove "will discontinue" flag from "${vendorName}"?`)) return;
+      const next = new Set(discontinuedVendors);
+      next.delete(key);
+      vendorSettingsMutation.mutate(buildSettingsUpdate({ discontinuedVendors: [...next] }));
+    } else {
+      if (!window.confirm(`Mark "${vendorName}" as will discontinue?`)) return;
+      const next = new Set(discontinuedVendors);
+      next.add(key);
+      vendorSettingsMutation.mutate(buildSettingsUpdate({ discontinuedVendors: [...next] }));
+    }
+  }
+
+  function handleContactedToggle(key: string, checked: boolean) {
+    const next = new Set(contactedVendors);
+    if (checked) next.add(key); else next.delete(key);
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ contactedVendors: [...next] }));
+  }
+
+  function saveVendorCard(vendorId: number) {
+    const next = { ...vendorOverrides, [vendorId]: vendorCardDraft };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, v]) => [String(k), v])),
+    }));
+    setEditingVendorCard(null);
+  }
+  function resetVendorCard(vendorId: number) {
+    const next = { ...vendorOverrides };
+    delete next[vendorId];
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, v]) => [String(k), v])),
+    }));
+    setEditingVendorCard(null);
+  }
+
   // Which vendor's "add" form is open
   const [editingContactsFor, setEditingContactsFor] = useState<number | null>(null);
   // Draft for new contact
@@ -951,14 +962,8 @@ export default function SalesRevenue() {
   const [inlineEdit, setInlineEdit] = useState<{ vendorId: number; contactId: string } | null>(null);
   const [inlineEditDraft, setInlineEditDraft] = useState<Omit<VendorContact, 'id'>>({ name: '', title: '', phone: '', email: '' });
 
-  function persistCustomContacts(next: Record<number, VendorContact[]>) {
-    setCustomContacts(next);
-    try { window.localStorage.setItem(CUSTOM_CONTACTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-  }
-
   function addCustomContact(vendorId: number) {
     const { name, title, phone, email } = contactDraft;
-    // At least one field must be filled
     if (!name?.trim() && !phone?.trim() && !email?.trim() && !title?.trim()) return;
     const contact: VendorContact = {
       id: crypto.randomUUID(),
@@ -968,7 +973,10 @@ export default function SalesRevenue() {
       email: email?.trim() || undefined,
     };
     const existing = customContacts[vendorId] ?? [];
-    persistCustomContacts({ ...customContacts, [vendorId]: [...existing, contact] });
+    const next = { ...customContacts, [vendorId]: [...existing, contact] };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      customContacts: Object.fromEntries(Object.entries(next).map(([k, v]) => [String(k), v])),
+    }));
     setContactDraft({ name: '', title: '', phone: '', email: '' });
     setEditingContactsFor(null);
   }
@@ -983,13 +991,19 @@ export default function SalesRevenue() {
       email: email?.trim() || undefined,
     };
     const existing = customContacts[vendorId] ?? [];
-    persistCustomContacts({ ...customContacts, [vendorId]: existing.map((c) => c.id === contactId ? updated : c) });
+    const next = { ...customContacts, [vendorId]: existing.map((c) => c.id === contactId ? updated : c) };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      customContacts: Object.fromEntries(Object.entries(next).map(([k, v]) => [String(k), v])),
+    }));
     setInlineEdit(null);
   }
 
   function removeCustomContact(vendorId: number, contactId: string) {
     const existing = customContacts[vendorId] ?? [];
-    persistCustomContacts({ ...customContacts, [vendorId]: existing.filter((c) => c.id !== contactId) });
+    const next = { ...customContacts, [vendorId]: existing.filter((c) => c.id !== contactId) };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      customContacts: Object.fromEntries(Object.entries(next).map(([k, v]) => [String(k), v])),
+    }));
   }
 
   const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
@@ -1034,6 +1048,9 @@ export default function SalesRevenue() {
   const [orderModalVendor, setOrderModalVendor] = useState<{ id: number; name: string } | null>(null);
   const [expandedOrderId, setExpandedOrderId] = useState<number | null>(null);
   const [orderLinesCache, setOrderLinesCache] = useState<Record<number, { lines: OrderLine[]; error?: string }>>({});
+
+  // For the low-stock contact popup on the Inventory tab
+  const [lowStockContactBrand, setLowStockContactBrand] = useState<string | null>(null);
 
   async function loadOrderLines(orderId: number) {
     try {
@@ -1542,10 +1559,7 @@ export default function SalesRevenue() {
                     <input
                       type="date"
                       value={filterStart}
-                      onChange={(e) => {
-                        setFilterStart(e.target.value);
-                        setDatePreset('custom');
-                      }}
+                      onChange={(e) => { setFilterStart(e.target.value); setDatePreset('custom'); }}
                       className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       aria-label="Start date"
                     />
@@ -1560,10 +1574,7 @@ export default function SalesRevenue() {
                     <input
                       type="date"
                       value={filterEnd}
-                      onChange={(e) => {
-                        setFilterEnd(e.target.value);
-                        setDatePreset('custom');
-                      }}
+                      onChange={(e) => { setFilterEnd(e.target.value); setDatePreset('custom'); }}
                       className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       aria-label="End date"
                     />
@@ -1579,6 +1590,38 @@ export default function SalesRevenue() {
                     {new Date(filterEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   </p>
                 )}
+
+                {/* ── Beat Last Year widget ── */}
+                {dashQ.data?.lastYear && (() => {
+                  const lyAmount = dashQ.data.lastYear!.selectedRange?.totalAmount
+                    ?? dashQ.data.lastYear!.today.totalAmount;
+                  const currentAmount = dashQ.data.selectedRange?.totalAmount
+                    ?? dashQ.data.today.totalAmount;
+                  const toBeat = lyAmount - currentAmount;
+                  const alreadyBeaten = toBeat <= 0;
+                  const lyDate = filterStart
+                    ? new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                    : 'same day';
+                  return (
+                    <div className={`ml-auto self-end flex flex-col items-end gap-0.5 rounded-xl px-4 py-2.5 border ${alreadyBeaten ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                        {alreadyBeaten ? '🏆 Beat Last Year' : `To Beat Last Year (${lyDate})`}
+                      </p>
+                      {alreadyBeaten ? (
+                        <p className="text-lg font-bold text-emerald-600 leading-tight">
+                          +{fmtDec(Math.abs(toBeat))} ahead
+                        </p>
+                      ) : (
+                        <p className="text-lg font-bold text-blue-700 leading-tight">
+                          {fmtDec(toBeat)} needed
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400">
+                        LY: {fmtDec(lyAmount)} · Now: {fmtDec(currentAmount)}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -1901,41 +1944,120 @@ export default function SalesRevenue() {
                     </div>
                   )}
 
-                  {/* Low stock items */}
-                  {d.lowStockItems && d.lowStockItems.length > 0 && (
-                    <div className="bg-white rounded-lg border border-red-200 p-5">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
-                        <Package className="w-4 h-4 text-red-500" /> Low Stock Alert (≤3 units)
-                      </h3>
-                      <p className="text-xs text-slate-500 mb-4">Items at Flower Mound with 3 or fewer units on hand. Consider reordering.</p>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="border-b border-slate-100">
-                              <th className="text-left py-2 text-slate-500 font-medium">SKU</th>
-                              <th className="text-left py-2 text-slate-500 font-medium">Description</th>
-                              <th className="text-left py-2 text-slate-500 font-medium">Brand</th>
-                              <th className="text-right py-2 text-slate-500 font-medium">On Hand</th>
-                              <th className="text-right py-2 text-slate-500 font-medium">Available</th>
-                              <th className="text-right py-2 text-slate-500 font-medium">Price</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50">
-                            {d.lowStockItems.map((item) => (
-                              <tr key={item.item_id}>
-                                <td className="py-1.5 text-slate-500 font-mono">{item.sku}</td>
-                                <td className="py-1.5 text-slate-700 max-w-[180px] truncate">{item.description}</td>
-                                <td className="py-1.5 text-slate-500">{item.brand}</td>
-                                <td className={`py-1.5 text-right font-medium ${item.qty_on_hand <= 1 ? 'text-red-600' : 'text-amber-600'}`}>{item.qty_on_hand}</td>
-                                <td className="py-1.5 text-right text-slate-600">{item.qty_available}</td>
-                                <td className="py-1.5 text-right text-slate-600">{fmtDec(item.price)}</td>
+                  {/* Low stock items — grouped by style, brand filter at top */}
+                  {d.lowStockItems && d.lowStockItems.length > 0 && (() => {
+                    const items = d.lowStockItems!;
+                    const allBrands = [...new Set(items.map((i) => i.brand).filter(Boolean))].sort();
+                    const filtered = stockBrandFilter
+                      ? items.filter((i) => i.brand === stockBrandFilter)
+                      : items;
+
+                    // Group by brand + base style (strip trailing size number)
+                    function baseStyle(desc: string): string {
+                      return desc.replace(/\s*[-–]\s*\d+(\.\d+)?$/, '').trim();
+                    }
+                    type StockItem = typeof items[0];
+                    const groups = new Map<string, { base: string; brand: string; price: number; items: StockItem[] }>();
+                    for (const item of filtered) {
+                      const base = baseStyle(item.description);
+                      const key = `${item.brand}||${base}`;
+                      if (!groups.has(key)) groups.set(key, { base, brand: item.brand, price: item.price, items: [] });
+                      groups.get(key)!.items.push(item);
+                    }
+                    const groupList = [...groups.values()].sort((a, b) => {
+                      // Sort by min qty_on_hand in group (most urgent first), then brand
+                      const minA = Math.min(...a.items.map((i) => i.qty_on_hand));
+                      const minB = Math.min(...b.items.map((i) => i.qty_on_hand));
+                      if (minA !== minB) return minA - minB;
+                      return a.brand.localeCompare(b.brand);
+                    });
+
+                    return (
+                      <div className="bg-white rounded-lg border border-red-200 p-5">
+                        <div className="flex items-start justify-between gap-4 mb-1">
+                          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                            <Package className="w-4 h-4 text-red-500" /> Low Stock Alert (≤3 units)
+                          </h3>
+                          <span className="text-xs text-slate-400 flex-shrink-0">
+                            {groupList.length} styles · {filtered.length} SKUs · {allBrands.length} brands
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-3">Items at Flower Mound with 3 or fewer units on hand. Grouped by style — click a row to see vendor contact info.</p>
+
+                        {/* Brand filter pills */}
+                        <div className="flex items-center gap-2 mb-4 flex-wrap">
+                          <span className="text-xs text-slate-500 flex-shrink-0">Brand:</span>
+                          <button onClick={() => setStockBrandFilter('')}
+                            className={`text-xs px-2.5 py-1 rounded-full border transition ${!stockBrandFilter ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                            All ({items.length})
+                          </button>
+                          {allBrands.map((b) => (
+                            <button key={b} onClick={() => setStockBrandFilter(b === stockBrandFilter ? '' : b)}
+                              className={`text-xs px-2.5 py-1 rounded-full border transition ${stockBrandFilter === b ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                              {b} ({items.filter((i) => i.brand === b).length})
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* Grouped table */}
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-100">
+                                <th className="text-left py-2 text-slate-500 font-medium">Style</th>
+                                <th className="text-left py-2 text-slate-500 font-medium">Brand</th>
+                                <th className="text-left py-2 text-slate-500 font-medium">Sizes on Hand</th>
+                                <th className="text-right py-2 text-slate-500 font-medium">SKUs</th>
+                                <th className="text-right py-2 text-slate-500 font-medium">Price</th>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                              {groupList.map((g) => {
+                                // Extract size from end of description
+                                const sizes = g.items
+                                  .map((i) => {
+                                    const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
+                                    return m ? m[1] : i.sku;
+                                  })
+                                  .sort((a, b) => parseFloat(a) - parseFloat(b));
+                                const minQty = Math.min(...g.items.map((i) => i.qty_on_hand));
+                                const key = `${g.brand}||${g.base}`;
+                                return (
+                                  <tr key={key} className="hover:bg-red-50 cursor-pointer transition-colors" onClick={() => setLowStockContactBrand(g.brand)}>
+                                    <td className="py-2 text-slate-700 max-w-[260px]">
+                                      <span className="font-medium">{g.base}</span>
+                                    </td>
+                                    <td className="py-2 text-blue-600 font-medium">{g.brand}</td>
+                                    <td className="py-2">
+                                      <div className="flex flex-wrap gap-1">
+                                        {sizes.map((s, si) => {
+                                          const item = g.items.find((i) => {
+                                            const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
+                                            return (m ? m[1] : i.sku) === s;
+                                          });
+                                          const qty = item?.qty_on_hand ?? 1;
+                                          return (
+                                            <span key={si}
+                                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${qty <= 1 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                              {s}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </td>
+                                    <td className={`py-2 text-right font-semibold ${minQty <= 1 ? 'text-red-600' : 'text-amber-600'}`}>
+                                      {g.items.length}
+                                    </td>
+                                    <td className="py-2 text-right text-slate-600">{fmtDec(g.price)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </>
               );
             })()}
@@ -2133,9 +2255,6 @@ export default function SalesRevenue() {
             {d && !d.notReady && (() => {
               const ci = d.customerInsights;
 
-              // Reorder alerts — from inventory data (only meaningful for current year)
-              const lowStock = !usingPrior ? (inventoryQ.data?.lowStockItems ?? []) : [];
-
               // Return rate by brand
               const returnData = (d.returnRows ?? [])
                 .filter((r) => (r['source_sales.gross_sales'] as number) > 0)
@@ -2251,42 +2370,14 @@ export default function SalesRevenue() {
                       )}
                     </div>
 
-                    {/* Reorder alerts */}
-                    <div className="bg-white rounded-lg border border-slate-200 p-5">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
+                    {/* Reorder alerts — consolidated into Low Stock Alert table below */}
+                    <div className="bg-white rounded-lg border border-slate-200 p-5 flex flex-col justify-center">
+                      <h3 className="text-sm font-semibold text-slate-900 mb-2 flex items-center gap-2">
                         <Package className="w-4 h-4 text-red-400" /> Reorder Alerts
                       </h3>
-                      <p className="text-xs text-slate-500 mb-3">Items at Flower Mound with ≤3 units. Tap a vendor name to call.</p>
-                      {usingPrior ? (
-                        <p className="text-sm text-slate-400 italic">Reorder alerts reflect current stock — not available for prior-year views.</p>
-                      ) : lowStock.length === 0 ? (
-                        <p className="text-sm text-slate-400 italic">No low-stock items — or inventory hasn't synced yet.</p>
-                      ) : (
-                        <div className="space-y-1.5 max-h-64 overflow-y-auto">
-                          {lowStock.slice(0, 30).map((item) => {
-                            const vendorInfo = VENDOR_CONTACTS[item.brand?.toUpperCase() ?? ''] ?? VENDOR_CONTACTS[item.brand ?? ''];
-                            return (
-                              <div key={item.item_id} className="flex items-start justify-between gap-2 text-xs py-1 border-b border-slate-50 last:border-0">
-                                <div className="min-w-0">
-                                  <p className="text-slate-800 font-medium truncate">{item.description}</p>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    {vendorInfo?.phone ? (
-                                      <a href={`tel:${vendorInfo.phone.replace(/\D/g,'')}`} className="text-blue-600 hover:underline">
-                                        {item.brand} · {vendorInfo.phone}
-                                      </a>
-                                    ) : (
-                                      <span className="text-slate-400">{item.brand}</span>
-                                    )}
-                                  </div>
-                                </div>
-                                <span className={`flex-shrink-0 font-bold text-sm ${item.qty_on_hand <= 1 ? 'text-red-600' : 'text-amber-600'}`}>
-                                  {item.qty_on_hand} left
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        Low-stock items (≤3 units) are shown in the <span className="font-medium text-slate-700">Low Stock Alert</span> table below — click any row to see full vendor contact info.
+                      </p>
                     </div>
                   </div>
                 </>
@@ -2314,6 +2405,30 @@ export default function SalesRevenue() {
                     <StatCard label="Vendors" value={d.vendorCount.toLocaleString()} sub="active suppliers" icon={ShoppingBag} color="blue" />
                     <StatCard label="Total Orders" value={d.totalOrders.toLocaleString()} sub="all time" icon={Package} color="green" />
                     <StatCard label="Open Orders" value={d.openOrderCount.toLocaleString()} sub="pending or open" icon={TrendingUp} color="amber" />
+                  </div>
+
+                  {/* ── Payment Processor ── */}
+                  <div className="bg-white rounded-lg border border-slate-200 p-5">
+                    <h3 className="text-sm font-semibold text-slate-900 mb-3">Payment Processor</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide mb-0.5">Processor</p>
+                        <p className="text-sm font-semibold text-slate-800">CardPointe</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide mb-0.5">Merchant ID</p>
+                        <p className="text-sm font-mono text-slate-800 select-all">496636327884</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide mb-0.5">Username</p>
+                        <p className="text-sm font-mono text-slate-800 select-all">496636327884</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide mb-0.5">Support</p>
+                        <a href="mailto:support@securetrust.com" className="text-sm text-blue-600 hover:underline block">support@securetrust.com</a>
+                        <a href="tel:8778280720" className="text-sm text-blue-600 hover:underline block">877-828-0720</a>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Vendor directory with contact info */}
@@ -2357,6 +2472,7 @@ export default function SalesRevenue() {
                           const key = `vendor-account:${v.id}`;
                           const hasAccount = activeAccounts.has(key);
                           const isDiscontinued = discontinuedVendors.has(key);
+                          const isContacted = !hasAccount && contactedVendors.has(key);
                           const ytdSales = brandSales[(v.name ?? '').toUpperCase()];
                           const rankRow = (d.vendorRank ?? []).find((r) => r.vendorId === v.id);
                           const openOrders = rankRow?.openOrders ?? 0;
@@ -2379,9 +2495,10 @@ export default function SalesRevenue() {
                           return (
                             <div
                               key={v.id}
-                              className={`rounded-lg border p-3 transition ${
+                              className={`relative rounded-lg border p-3 transition ${
                                 isDiscontinued ? 'border-amber-300 bg-amber-50'
                                   : hasAccount ? 'border-emerald-300 bg-emerald-50'
+                                  : isContacted ? 'border-yellow-300 bg-yellow-50'
                                   : 'border-slate-100 bg-slate-50 hover:border-slate-300'
                               }`}
                             >
@@ -2389,7 +2506,7 @@ export default function SalesRevenue() {
                               <div className="flex items-start justify-between gap-2 mb-1">
                                 <div className="min-w-0 flex-1">
                                   <div className="flex items-center gap-1.5">
-                                    <p className={`text-xs font-semibold truncate ${isDiscontinued ? 'text-amber-900' : hasAccount ? 'text-emerald-900' : 'text-slate-900'}`}>
+                                    <p className={`text-xs font-semibold truncate ${isDiscontinued ? 'text-amber-900' : hasAccount ? 'text-emerald-900' : isContacted ? 'text-yellow-900' : 'text-slate-900'}`}>
                                       {displayName}
                                       {isDiscontinued && <span className="ml-1.5 text-[10px] font-medium text-amber-700 bg-amber-100 px-1 py-0.5 rounded">Discontinuing</span>}
                                     </p>
@@ -2435,10 +2552,12 @@ export default function SalesRevenue() {
                                     <input type="checkbox" checked={hasAccount} onChange={(e) => handleVendorAccountToggle(key, v.name ?? `Vendor ${v.id}`, e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
                                     <span className={`text-[10px] ${hasAccount ? 'text-emerald-700 font-medium' : 'text-slate-400'}`}>{hasAccount ? 'Active' : 'Account?'}</span>
                                   </label>
-                                  <button type="button" onClick={() => handleDiscontinuedToggle(key, v.name ?? `Vendor ${v.id}`)}
-                                    className={`text-[10px] px-1.5 py-0.5 rounded border transition ${isDiscontinued ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'}`}>
-                                    {isDiscontinued ? '⚠ Discontinuing' : 'Discontinue?'}
-                                  </button>
+                                  {!hasAccount && (
+                                    <label className="flex items-center gap-1 cursor-pointer">
+                                      <input type="checkbox" checked={isContacted} onChange={(e) => handleContactedToggle(key, e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-yellow-500 focus:ring-yellow-400 cursor-pointer" />
+                                      <span className={`text-[10px] ${isContacted ? 'text-yellow-700 font-medium' : 'text-slate-400'}`}>{isContacted ? 'Contacted' : 'Contacted?'}</span>
+                                    </label>
+                                  )}
                                 </div>
                               </div>
 
@@ -2575,6 +2694,14 @@ export default function SalesRevenue() {
                                   </div>
                                 );
                               })()}
+
+                              {/* ── Discontinue button — bottom-right corner ── */}
+                              <div className="flex justify-end mt-2">
+                                <button type="button" onClick={() => handleDiscontinuedToggle(key, v.name ?? `Vendor ${v.id}`)}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded border transition ${isDiscontinued ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'}`}>
+                                  {isDiscontinued ? '⚠ Discontinuing' : 'Discontinue?'}
+                                </button>
+                              </div>
                             </div>
                           );
                         });
@@ -3088,6 +3215,120 @@ export default function SalesRevenue() {
           </div>
         );
       })()}
+
+      {/* ── Low-stock vendor contact popup ── */}
+      {lowStockContactBrand && (() => {
+        const info = VENDOR_CONTACTS[lowStockContactBrand.toUpperCase()] ?? VENDOR_CONTACTS[lowStockContactBrand];
+        // Also check vendor card overrides — find the vendor by matching name
+        const overrideEntry = Object.entries(vendorOverrides).find(([, ov]) =>
+          (ov.displayName ?? '').toUpperCase() === lowStockContactBrand.toUpperCase()
+        );
+        const ov = overrideEntry ? overrideEntry[1] : {};
+        const phone   = ov.phone   ?? info?.phone;
+        const email   = ov.email   ?? info?.email;
+        const website = ov.website ?? info?.website;
+        const repName  = ov.repName  ?? info?.rep?.name;
+        const repPhone = ov.repPhone ?? info?.rep?.phone;
+        const repEmail = ov.repEmail ?? info?.rep?.email;
+        const repTitle = ov.repTitle;
+        const hasRep = repName || repPhone || repEmail;
+        const hasAny = phone || email || website || hasRep;
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="low-stock-contact-title"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+            onClick={(e) => { if (e.target === e.currentTarget) setLowStockContactBrand(null); }}
+          >
+            <div className="bg-white rounded-xl shadow-xl w-full max-w-sm">
+              {/* Header */}
+              <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
+                <div>
+                  <h3 id="low-stock-contact-title" className="text-base font-semibold text-slate-900">{lowStockContactBrand}</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Vendor contact info</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLowStockContactBrand(null)}
+                  aria-label="Close"
+                  className="text-slate-400 hover:text-slate-700 text-xl leading-none"
+                >×</button>
+              </div>
+
+              {/* Body */}
+              <div className="px-5 py-4 space-y-3">
+                {!hasAny && (
+                  <p className="text-sm text-slate-400 italic">No contact info on file for this vendor.</p>
+                )}
+                {phone && (
+                  <div className="flex items-center gap-3">
+                    <span className="text-base">📞</span>
+                    <div>
+                      <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide">Phone</p>
+                      <a href={`tel:${phone.replace(/\D/g,'')}`} className="text-sm text-blue-600 hover:underline font-medium">{phone}</a>
+                    </div>
+                  </div>
+                )}
+                {email && (
+                  <div className="flex items-center gap-3">
+                    <span className="text-base">✉</span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide">Email</p>
+                      <a href={`mailto:${email}`} className="text-sm text-blue-600 hover:underline truncate block">{email}</a>
+                    </div>
+                  </div>
+                )}
+                {website && (
+                  <div className="flex items-center gap-3">
+                    <span className="text-base">🌐</span>
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wide">Website</p>
+                      <a href={website.startsWith('http') ? website : `https://${website}`} target="_blank" rel="noopener noreferrer" className="text-sm text-slate-600 hover:underline truncate block">{website.replace('https://','').replace('www.','')}</a>
+                    </div>
+                  </div>
+                )}
+                {hasRep && (
+                  <div className="pt-2 mt-2 border-t border-slate-100 space-y-2">
+                    <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">Sales Rep</p>
+                    {repName && (
+                      <p className="text-sm font-medium text-slate-800">
+                        {repName}{repTitle && <span className="font-normal text-slate-400"> — {repTitle}</span>}
+                      </p>
+                    )}
+                    {repPhone && (
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">📞</span>
+                        <a href={`tel:${repPhone.replace(/\D/g,'')}`} className="text-sm text-blue-600 hover:underline">{repPhone}</a>
+                      </div>
+                    )}
+                    {repEmail && (
+                      <div className="flex items-center gap-3">
+                        <span className="text-base">✉</span>
+                        <a href={`mailto:${repEmail}`} className="text-sm text-blue-600 hover:underline truncate">{repEmail}</a>
+                      </div>
+                    )}
+                    {info?.rep?.account && (
+                      <p className="text-xs text-slate-500">Account # {info.rep.account}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-5 py-3 border-t border-slate-100 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setLowStockContactBrand(null)}
+                  className="px-4 py-1.5 text-sm rounded-md border border-slate-200 text-slate-700 hover:bg-slate-50"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -3199,9 +3440,6 @@ function KpiGrid({
       <KpiCard label="Total Units Sold"        current={estUnits}       ly={lyEstUnits > 0 ? lyEstUnits : undefined}  formatVal={(n) => n.toFixed(0)} sub="est. (1.5× tickets)" />
       <KpiCard label="Units / Transaction"     current={unitsPerTxn}    ly={lyUnitsPerTxn}                            formatVal={(n) => n.toFixed(2)} />
       <KpiCard label="Net Returns"             current={0}              ly={undefined}                                formatVal={() => '$0'} sub="not tracked in rollup" />
-      <KpiCard label="Last 7 Days"             current={data.last7Days.totalAmount} ly={ly?.last7Days.totalAmount}    formatVal={fmt}
-        sub={`${data.last7Days.ticketCount} tickets`}
-        subLy={ly ? `${ly.last7Days.ticketCount} tickets` : undefined} />
       <KpiCard label="Year to Date (Net)"      current={ytdNet}         ly={lyYtdAmount > 0 ? lyYtdAmount : undefined} formatVal={fmt}
         sub={`${ytdTickets.toLocaleString()} tickets`}
         subLy={ly ? `${lyYtdTickets.toLocaleString()} tickets` : undefined} />
@@ -3258,132 +3496,255 @@ function AlertsPanel({
   );
 }
 
-// ── Notes panel (sticky, persisted in localStorage) ───────────────────
+// ── Action Items panel — multi-column with assignees ─────────────────
 interface DashNote {
   id: string;
   text: string;
   createdAt: string;
   done: boolean;
+  assignee?: string; // column id
+}
+
+interface ActionColumn {
+  id: string;
+  name: string;
 }
 
 const NOTES_KEY = 'foot-solutions:dash-notes';
+const COLUMNS_KEY = 'foot-solutions:action-columns';
+
+const DEFAULT_COLUMNS: ActionColumn[] = [
+  { id: 'justin', name: 'Justin' },
+  { id: 'nancy',  name: 'Nancy'  },
+];
+
+// ── Lifted out of NotesPanel so React never remounts them on re-render ──
+
+interface NoteItemProps {
+  n: DashNote;
+  columns: ActionColumn[];
+  onToggle: (id: string) => void;
+  onRemove: (id: string) => void;
+  onReassign: (id: string, assignee: string | undefined) => void;
+}
+function NoteItem({ n, columns, onToggle, onRemove, onReassign }: NoteItemProps) {
+  return (
+    <li className={`flex items-start gap-2 bg-white rounded-lg px-2.5 py-2 border shadow-sm ${n.done ? 'opacity-50 border-slate-100' : 'border-amber-200'}`}>
+      <input type="checkbox" checked={n.done} onChange={() => onToggle(n.id)}
+        className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer" aria-label={n.done ? 'Unmark done' : 'Mark done'} />
+      <span className={`flex-1 text-xs leading-snug ${n.done ? 'line-through text-slate-400' : 'text-slate-700'}`}>{n.text}</span>
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <select
+          value={n.assignee ?? ''}
+          onChange={(e) => onReassign(n.id, e.target.value || undefined)}
+          className="text-[10px] border border-slate-200 rounded px-1 py-0.5 text-slate-500 bg-white focus:outline-none focus:ring-1 focus:ring-amber-400 cursor-pointer"
+          aria-label="Reassign"
+          title="Move to column"
+        >
+          <option value="">Unassigned</option>
+          {columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <button onClick={() => onRemove(n.id)}
+          className="text-slate-300 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
+          aria-label="Delete" title="Delete">
+          <X className="w-3 h-3" />
+        </button>
+      </div>
+    </li>
+  );
+}
+
+interface ColumnInputProps {
+  colId?: string;
+  value: string;
+  onChange: (v: string) => void;
+  onAdd: () => void;
+}
+function ColumnInput({ value, onChange, onAdd }: ColumnInputProps) {
+  return (
+    <div className="flex gap-1.5 mt-2">
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(); } }}
+        placeholder="Add item… (Enter)"
+        className="flex-1 text-[11px] rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
+      />
+      <button onClick={onAdd} disabled={!value.trim()}
+        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-amber-400 text-white hover:bg-amber-500 disabled:opacity-40 transition">
+        Add
+      </button>
+    </div>
+  );
+}
 
 function NotesPanel() {
   const [notes, setNotes] = useState<DashNote[]>(() => {
-    try {
-      return JSON.parse(window.localStorage.getItem(NOTES_KEY) ?? '[]') as DashNote[];
-    } catch { return []; }
+    try { return JSON.parse(window.localStorage.getItem(NOTES_KEY) ?? '[]') as DashNote[]; }
+    catch { return []; }
   });
-  const [draft, setDraft] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [columns, setColumns] = useState<ActionColumn[]>(() => {
+    try {
+      const saved = window.localStorage.getItem(COLUMNS_KEY);
+      return saved ? JSON.parse(saved) as ActionColumn[] : DEFAULT_COLUMNS;
+    } catch { return DEFAULT_COLUMNS; }
+  });
 
-  function persist(next: DashNote[]) {
+  // Per-column draft inputs
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // Which column name is being edited
+  const [editingCol, setEditingCol] = useState<string | null>(null);
+  const [editingColName, setEditingColName] = useState('');
+  // Unassigned draft (no column selected)
+  const [unassignedDraft, setUnassignedDraft] = useState('');
+
+  function persistNotes(next: DashNote[]) {
     setNotes(next);
     try { window.localStorage.setItem(NOTES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
   }
+  function persistColumns(next: ActionColumn[]) {
+    setColumns(next);
+    try { window.localStorage.setItem(COLUMNS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
 
-  function addNote() {
-    const text = draft.trim();
+  function addNote(assignee?: string) {
+    const text = (assignee ? drafts[assignee] : unassignedDraft)?.trim();
     if (!text) return;
-    persist([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString(), done: false }, ...notes]);
-    setDraft('');
-    textareaRef.current?.focus();
+    persistNotes([{ id: crypto.randomUUID(), text, createdAt: new Date().toISOString(), done: false, assignee }, ...notes]);
+    if (assignee) setDrafts((d) => ({ ...d, [assignee]: '' }));
+    else setUnassignedDraft('');
   }
 
   function toggleDone(id: string) {
-    persist(notes.map((n) => n.id === id ? { ...n, done: !n.done } : n));
+    persistNotes(notes.map((n) => n.id === id ? { ...n, done: !n.done } : n));
   }
 
   function removeNote(id: string) {
-    persist(notes.filter((n) => n.id !== id));
+    persistNotes(notes.filter((n) => n.id !== id));
   }
 
-  const active = notes.filter((n) => !n.done);
-  const done = notes.filter((n) => n.done);
+  function reassign(id: string, assignee: string | undefined) {
+    persistNotes(notes.map((n) => n.id === id ? { ...n, assignee } : n));
+  }
+
+  function addColumn() {
+    const id = crypto.randomUUID();
+    persistColumns([...columns, { id, name: 'New Person' }]);
+    setEditingCol(id);
+    setEditingColName('New Person');
+  }
+
+  function removeColumn(colId: string) {
+    if (!window.confirm('Remove this column? Notes assigned to it will move to Unassigned.')) return;
+    persistColumns(columns.filter((c) => c.id !== colId));
+    persistNotes(notes.map((n) => n.assignee === colId ? { ...n, assignee: undefined } : n));
+  }
+
+  function saveColName(colId: string) {
+    const name = editingColName.trim();
+    if (!name) return;
+    persistColumns(columns.map((c) => c.id === colId ? { ...c, name } : c));
+    setEditingCol(null);
+  }
+
+  // Unassigned notes
+  const unassigned = notes.filter((n) => !n.assignee || !columns.find((c) => c.id === n.assignee));
+  const totalActive = notes.filter((n) => !n.done).length;
 
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-5 flex flex-col gap-3">
+    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-col gap-3">
+      {/* Header */}
       <div className="flex items-center gap-2">
         <StickyNote className="w-4 h-4 text-amber-500" />
         <h3 className="text-sm font-semibold text-amber-800">Action Items</h3>
-        {active.length > 0 && (
-          <span className="ml-auto flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-white">
-            {active.length}
+        {totalActive > 0 && (
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-white">
+            {totalActive}
           </span>
         )}
-      </div>
-
-      {/* Active notes */}
-      {active.length > 0 && (
-        <ul className="space-y-1.5">
-          {active.map((n) => (
-            <li key={n.id} className="flex items-start gap-2 bg-white rounded-lg px-3 py-2 border border-amber-200 shadow-sm">
-              <input
-                type="checkbox"
-                checked={false}
-                onChange={() => toggleDone(n.id)}
-                className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer"
-                aria-label="Mark done"
-              />
-              <span className="flex-1 text-xs text-slate-700 leading-snug">{n.text}</span>
-              <button
-                onClick={() => removeNote(n.id)}
-                className="flex-shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
-                aria-label="Delete note"
-                title="Delete note"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Done notes (collapsed) */}
-      {done.length > 0 && (
-        <ul className="space-y-1">
-          {done.map((n) => (
-            <li key={n.id} className="flex items-start gap-2 opacity-60">
-              <input
-                type="checkbox"
-                checked={true}
-                onChange={() => toggleDone(n.id)}
-                className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer"
-                aria-label="Unmark done"
-              />
-              <span className="flex-1 text-xs text-slate-500 line-through leading-snug">{n.text}</span>
-              <button
-                onClick={() => removeNote(n.id)}
-                className="flex-shrink-0 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded p-0.5 transition-colors"
-                aria-label="Delete note"
-                title="Delete note"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Input */}
-      <div className="flex gap-2">
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); addNote(); } }}
-          placeholder="Add action item… (Enter to save)"
-          rows={2}
-          className="flex-1 text-xs rounded-lg border border-amber-200 bg-white px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
-        />
-        <button
-          onClick={addNote}
-          disabled={!draft.trim()}
-          className="self-end px-3 py-2 text-xs font-medium rounded-lg bg-amber-400 text-white hover:bg-amber-500 disabled:opacity-40 transition"
-        >
-          Add
+        <button onClick={addColumn}
+          className="ml-auto text-[11px] text-amber-600 hover:text-amber-800 border border-amber-300 rounded px-2 py-0.5 hover:bg-amber-100 transition"
+          title="Add a new person column">
+          + Add column
         </button>
       </div>
+
+      {/* Columns */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+        {columns.map((col) => {
+          const colNotes = notes.filter((n) => n.assignee === col.id);
+          const colActive = colNotes.filter((n) => !n.done).length;
+          return (
+            <div key={col.id} className="bg-white/60 rounded-lg border border-amber-200 p-2.5 flex flex-col gap-1.5">
+              {/* Column header */}
+              <div className="flex items-center gap-1 mb-1">
+                {editingCol === col.id ? (
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editingColName}
+                    onChange={(e) => setEditingColName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveColName(col.id); if (e.key === 'Escape') setEditingCol(null); }}
+                    onBlur={() => saveColName(col.id)}
+                    className="flex-1 text-xs font-semibold border-b border-amber-400 bg-transparent focus:outline-none text-amber-900"
+                  />
+                ) : (
+                  <button
+                    onClick={() => { setEditingCol(col.id); setEditingColName(col.name); }}
+                    className="flex-1 text-xs font-semibold text-amber-900 text-left hover:text-amber-600 transition"
+                    title="Click to rename"
+                  >
+                    {col.name}
+                    {colActive > 0 && <span className="ml-1.5 text-[10px] font-bold text-amber-500">({colActive})</span>}
+                  </button>
+                )}
+                <button onClick={() => removeColumn(col.id)}
+                  className="flex-shrink-0 text-slate-300 hover:text-red-400 transition-colors" title="Remove column">
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Notes in this column */}
+              {colNotes.length > 0 ? (
+                <ul className="space-y-1.5">
+                  {colNotes.map((n) => (
+                    <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} />
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-[10px] text-slate-400 italic px-1">No items yet</p>
+              )}
+
+              <ColumnInput
+                colId={col.id}
+                value={drafts[col.id] ?? ''}
+                onChange={(v) => setDrafts((d) => ({ ...d, [col.id]: v }))}
+                onAdd={() => addNote(col.id)}
+              />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Unassigned */}
+      {unassigned.length > 0 && (
+        <div className="bg-white/40 rounded-lg border border-dashed border-amber-200 p-2.5">
+          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Unassigned</p>
+          <ul className="space-y-1.5">
+            {unassigned.map((n) => (
+              <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Global add (unassigned) */}
+      <ColumnInput
+        value={unassignedDraft}
+        onChange={setUnassignedDraft}
+        onAdd={() => addNote(undefined)}
+      />
     </div>
   );
 }

@@ -15,14 +15,21 @@ const CLIPBOARD_CLEAR_MS = 60_000;
 export default function CredentialRow({ credential }: CredentialRowProps) {
   const queryClient = useQueryClient();
 
-  // Copy state
+  // Password copy state
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle');
   const [copyError, setCopyError] = useState<string | null>(null);
   const clipboardTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const confirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Edit state
+  // Username copy state
+  const [userCopyStatus, setUserCopyStatus] = useState<'idle' | 'copied'>('idle');
+  const userCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Edit state — now covers all fields
   const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editUrl, setEditUrl] = useState('');
+  const [editUsername, setEditUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showNewPassword, setShowNewPassword] = useState(false);
@@ -35,12 +42,13 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
     return () => {
       if (clipboardTimerRef.current) clearTimeout(clipboardTimerRef.current);
       if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      if (userCopyTimerRef.current) clearTimeout(userCopyTimerRef.current);
     };
   }, []);
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, password }: { id: string; password: string }) =>
-      api.put(`/credentials/${id}`, { password }).then((r) => r.data),
+    mutationFn: ({ id, ...fields }: { id: string; name?: string; url?: string; username?: string; password?: string }) =>
+      api.put(`/credentials/${id}`, fields).then((r) => r.data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['credentials'] });
       setEditSuccess(true);
@@ -50,7 +58,7 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
       setTimeout(() => setEditSuccess(false), 5000);
     },
     onError: (err: { response?: { data?: { error?: string } } }) => {
-      setEditError(err.response?.data?.error ?? 'Failed to update password. Please try again.');
+      setEditError(err.response?.data?.error ?? 'Failed to update. Please try again.');
     },
   });
 
@@ -90,24 +98,40 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
     }
   };
 
+  const handleCopyUsername = async () => {
+    try {
+      await navigator.clipboard.writeText(credential.username);
+      setUserCopyStatus('copied');
+      userCopyTimerRef.current = setTimeout(() => setUserCopyStatus('idle'), 2000);
+    } catch {
+      // fallback — silently ignore
+    }
+  };
+
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setEditError(null);
-    if (newPassword !== confirmPassword) {
-      setEditError('Passwords do not match.');
-      return;
+
+    // Build only the fields that changed
+    const fields: { name?: string; url?: string; username?: string; password?: string } = {};
+    if (editName.trim() && editName.trim() !== credential.name) fields.name = editName.trim();
+    if (editUrl.trim() !== (credential.url ?? '')) fields.url = editUrl.trim();
+    if (editUsername.trim() !== credential.username) fields.username = editUsername.trim();
+    if (newPassword) {
+      if (newPassword !== confirmPassword) { setEditError('Passwords do not match.'); return; }
+      if (newPassword.length < 8) { setEditError('Password must be at least 8 characters.'); return; }
+      fields.password = newPassword;
     }
-    if (newPassword.length < 8) {
-      setEditError('Password must be at least 8 characters.');
-      return;
-    }
-    updateMutation.mutate({ id: credential.id, password: newPassword });
+    if (Object.keys(fields).length === 0) { setEditError('No changes to save.'); return; }
+    updateMutation.mutate({ id: credential.id, ...fields });
   };
 
-  const canSubmitEdit =
-    newPassword.length >= 8 &&
-    confirmPassword.length >= 8 &&
-    newPassword === confirmPassword;
+  const canSubmitEdit = !updateMutation.isPending && (
+    (editName.trim() && editName.trim() !== credential.name) ||
+    editUrl.trim() !== (credential.url ?? '') ||
+    editUsername.trim() !== credential.username ||
+    (newPassword.length >= 8 && newPassword === confirmPassword)
+  );
 
   return (
     <>
@@ -135,7 +159,20 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
           )}
         </td>
         <td className="px-4 py-3 text-brand-700 truncate" title={credential.username}>
-          {credential.username}
+          <span className="flex items-center gap-1.5">
+            <span className="truncate">{credential.username}</span>
+            <button
+              onClick={() => void handleCopyUsername()}
+              aria-label={`Copy username for ${credential.name}`}
+              title="Copy username"
+              className="flex-shrink-0 text-brand-300 hover:text-brand-600 transition-colors"
+            >
+              {userCopyStatus === 'copied'
+                ? <Check className="w-3.5 h-3.5 text-green-500" />
+                : <Copy className="w-3.5 h-3.5" />
+              }
+            </button>
+          </span>
         </td>
         <td
           className="px-4 py-3 text-brand-400 tracking-widest whitespace-nowrap"
@@ -165,20 +202,21 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
             {/* Edit button */}
             <button
               onClick={() => {
+                if (!isEditing) {
+                  setEditName(credential.name);
+                  setEditUrl(credential.url ?? '');
+                  setEditUsername(credential.username);
+                  setNewPassword('');
+                  setConfirmPassword('');
+                  setEditError(null);
+                }
                 setIsEditing((v) => !v);
-                setEditError(null);
-                setNewPassword('');
-                setConfirmPassword('');
               }}
-              aria-label={isEditing ? `Cancel editing ${credential.name}` : `Edit password for ${credential.name}`}
+              aria-label={isEditing ? `Cancel editing ${credential.name}` : `Edit ${credential.name}`}
               aria-expanded={isEditing}
               className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-brand-200 text-brand-600 hover:bg-brand-50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
             >
-              {isEditing ? (
-                <X className="w-3.5 h-3.5" aria-hidden="true" />
-              ) : (
-                <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
-              )}
+              {isEditing ? <X className="w-3.5 h-3.5" aria-hidden="true" /> : <Pencil className="w-3.5 h-3.5" aria-hidden="true" />}
               {isEditing ? 'Cancel' : 'Edit'}
             </button>
           </div>
@@ -203,84 +241,62 @@ export default function CredentialRow({ credential }: CredentialRowProps) {
       {isEditing && (
         <tr>
           <td colSpan={5} className="px-4 pb-4 bg-brand-50">
-            <form
-              onSubmit={handleEditSubmit}
-              aria-label={`Update password for ${credential.name}`}
-              className="flex flex-col sm:flex-row items-start gap-3 pt-3"
-            >
-              {/* New password */}
-              <div className="relative">
-                <label htmlFor={`new-pw-${credential.id}`} className="sr-only">
-                  New password
-                </label>
-                <input
-                  id={`new-pw-${credential.id}`}
-                  type={showNewPassword ? 'text' : 'password'}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="New password"
-                  minLength={8}
-                  autoComplete="new-password"
-                  className="block w-56 rounded-lg border border-brand-300 bg-white text-sm py-2 pl-3 pr-9 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowNewPassword((v) => !v)}
-                  aria-label={showNewPassword ? 'Hide new password' : 'Show new password'}
-                  className="absolute inset-y-0 right-2 flex items-center text-brand-400 hover:text-brand-600"
-                >
-                  {showNewPassword ? (
-                    <EyeOff className="w-4 h-4" aria-hidden="true" />
-                  ) : (
-                    <Eye className="w-4 h-4" aria-hidden="true" />
-                  )}
-                </button>
+            <form onSubmit={handleEditSubmit} aria-label={`Edit ${credential.name}`} className="pt-3 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Name */}
+                <div>
+                  <label htmlFor={`edit-name-${credential.id}`} className="block text-xs font-medium text-brand-600 mb-1">Name</label>
+                  <input id={`edit-name-${credential.id}`} type="text" value={editName} onChange={(e) => setEditName(e.target.value)}
+                    className="block w-full rounded-lg border border-brand-300 bg-white text-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+                {/* URL */}
+                <div>
+                  <label htmlFor={`edit-url-${credential.id}`} className="block text-xs font-medium text-brand-600 mb-1">URL</label>
+                  <input id={`edit-url-${credential.id}`} type="text" value={editUrl} onChange={(e) => setEditUrl(e.target.value)}
+                    className="block w-full rounded-lg border border-brand-300 bg-white text-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+                {/* Username */}
+                <div>
+                  <label htmlFor={`edit-user-${credential.id}`} className="block text-xs font-medium text-brand-600 mb-1">Username / Email</label>
+                  <input id={`edit-user-${credential.id}`} type="text" value={editUsername} onChange={(e) => setEditUsername(e.target.value)}
+                    className="block w-full rounded-lg border border-brand-300 bg-white text-sm py-2 px-3 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                </div>
+                {/* New password */}
+                <div>
+                  <label htmlFor={`new-pw-${credential.id}`} className="block text-xs font-medium text-brand-600 mb-1">New Password <span className="text-brand-400 font-normal">(leave blank to keep)</span></label>
+                  <div className="relative">
+                    <input id={`new-pw-${credential.id}`} type={showNewPassword ? 'text' : 'password'} value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)} placeholder="New password" autoComplete="new-password"
+                      className="block w-full rounded-lg border border-brand-300 bg-white text-sm py-2 pl-3 pr-9 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    <button type="button" onClick={() => setShowNewPassword((v) => !v)} aria-label={showNewPassword ? 'Hide' : 'Show'}
+                      className="absolute inset-y-0 right-2 flex items-center text-brand-400 hover:text-brand-600">
+                      {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+                {/* Confirm password — only show if new password entered */}
+                {newPassword && (
+                  <div>
+                    <label htmlFor={`confirm-pw-${credential.id}`} className="block text-xs font-medium text-brand-600 mb-1">Confirm Password</label>
+                    <div className="relative">
+                      <input id={`confirm-pw-${credential.id}`} type={showConfirmPassword ? 'text' : 'password'} value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm password" autoComplete="new-password"
+                        className="block w-full rounded-lg border border-brand-300 bg-white text-sm py-2 pl-3 pr-9 focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                      <button type="button" onClick={() => setShowConfirmPassword((v) => !v)} aria-label={showConfirmPassword ? 'Hide' : 'Show'}
+                        className="absolute inset-y-0 right-2 flex items-center text-brand-400 hover:text-brand-600">
+                        {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-
-              {/* Confirm password */}
-              <div className="relative">
-                <label htmlFor={`confirm-pw-${credential.id}`} className="sr-only">
-                  Confirm new password
-                </label>
-                <input
-                  id={`confirm-pw-${credential.id}`}
-                  type={showConfirmPassword ? 'text' : 'password'}
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm password"
-                  minLength={8}
-                  autoComplete="new-password"
-                  className="block w-56 rounded-lg border border-brand-300 bg-white text-sm py-2 pl-3 pr-9 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmPassword((v) => !v)}
-                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
-                  className="absolute inset-y-0 right-2 flex items-center text-brand-400 hover:text-brand-600"
-                >
-                  {showConfirmPassword ? (
-                    <EyeOff className="w-4 h-4" aria-hidden="true" />
-                  ) : (
-                    <Eye className="w-4 h-4" aria-hidden="true" />
-                  )}
+              <div className="flex items-center gap-3">
+                <button type="submit" disabled={!canSubmitEdit}
+                  className="px-4 py-2 bg-brand-700 text-white text-sm font-medium rounded-lg hover:bg-brand-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500">
+                  {updateMutation.isPending ? 'Saving…' : 'Save Changes'}
                 </button>
+                {editError && <p role="alert" className="text-xs text-red-600">{editError}</p>}
               </div>
-
-              {/* Submit */}
-              <button
-                type="submit"
-                disabled={!canSubmitEdit || updateMutation.isPending}
-                className="px-4 py-2 bg-brand-700 text-white text-sm font-medium rounded-lg hover:bg-brand-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
-              >
-                {updateMutation.isPending ? 'Saving…' : 'Save'}
-              </button>
-
-              {/* Edit error */}
-              {editError && (
-                <p role="alert" className="text-xs text-red-600 self-center">
-                  {editError}
-                </p>
-              )}
             </form>
           </td>
         </tr>

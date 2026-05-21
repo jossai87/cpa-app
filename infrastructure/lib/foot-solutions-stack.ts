@@ -284,12 +284,12 @@ export class FootSolutionsStack extends Stack {
     });
     Tags.of(credFn).add('Component', 'credentials');
 
-    // Grant Secrets Manager GetSecretValue + PutSecretValue on credential path
+    // Grant Secrets Manager GetSecretValue + PutSecretValue + CreateSecret on credential path
     credFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'SecretsManagerCredentials',
         effect: iam.Effect.ALLOW,
-        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue'],
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue', 'secretsmanager:CreateSecret'],
         resources: ['arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/credentials/*'],
       })
     );
@@ -591,6 +591,12 @@ export class FootSolutionsStack extends Stack {
       authorizer: jwtAuthorizer,
     });
     httpApi.addRoutes({
+      path: '/credentials',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: credIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
       path: '/credentials/{id}/copy',
       methods: [apigwv2.HttpMethod.POST],
       integration: credIntegration,
@@ -673,6 +679,18 @@ export class FootSolutionsStack extends Stack {
     httpApi.addRoutes({
       path: '/pos/insights',
       methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/vendor-settings',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/vendor-settings',
+      methods: [apigwv2.HttpMethod.PUT],
       integration: heartlandIntegration,
       authorizer: jwtAuthorizer,
     });

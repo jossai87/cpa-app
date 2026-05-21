@@ -16,6 +16,8 @@
  *   GET /pos/staff               → sales by rep from cached rollups
  *   GET /pos/sync-status         → last sync info (when, durations, counts)
  *   POST /pos/sync               → trigger a manual sync (async, returns 202)
+ *   GET /pos/vendor-settings     → persisted vendor account flags + overrides
+ *   PUT /pos/vendor-settings     → save vendor account flags + overrides
  */
 
 import {
@@ -1264,6 +1266,102 @@ async function handlePurchaseOrderLines(
   }
 }
 
+// ── Vendor settings (account flags + card overrides + custom contacts) ──
+//
+// Stored in DynamoDB under the owner's partition so the data survives
+// redeployments and is consistent across all browsers/devices.
+//
+// DynamoDB item shape:
+//   { userId: OWNER_USER_ID, sk: 'POS#VENDOR#SETTINGS',
+//     activeAccounts: string[],          // e.g. ["vendor-account:123"]
+//     discontinuedVendors: string[],     // e.g. ["vendor-account:456"]
+//     vendorOverrides: Record<string, VendorOverride>,
+//     customContacts: Record<string, VendorContact[]>,
+//     updatedAt: string }
+
+async function handleGetVendorSettings(): Promise<APIGatewayProxyResultV2> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { userId: OWNER_USER_ID, sk: 'POS#VENDOR#SETTINGS' },
+    })
+  );
+  if (!result.Item) {
+    return json(200, {
+      activeAccounts: [],
+      discontinuedVendors: [],
+      contactedVendors: [],
+      vendorOverrides: {},
+      customContacts: {},
+      updatedAt: null,
+    });
+  }
+  return json(200, {
+    activeAccounts: result.Item['activeAccounts'] ?? [],
+    discontinuedVendors: result.Item['discontinuedVendors'] ?? [],
+    contactedVendors: result.Item['contactedVendors'] ?? [],
+    vendorOverrides: result.Item['vendorOverrides'] ?? {},
+    customContacts: result.Item['customContacts'] ?? {},
+    updatedAt: result.Item['updatedAt'] ?? null,
+  });
+}
+
+async function handlePutVendorSettings(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
+  let body: {
+    activeAccounts?: string[];
+    discontinuedVendors?: string[];
+    contactedVendors?: string[];
+    vendorOverrides?: Record<string, unknown>;
+    customContacts?: Record<string, unknown[]>;
+  };
+  try {
+    body = JSON.parse(event.body ?? '{}') as typeof body;
+  } catch {
+    return json(400, { error: 'Invalid JSON body' });
+  }
+
+  // Basic validation — all fields are optional (partial updates allowed)
+  if (body.activeAccounts !== undefined && !Array.isArray(body.activeAccounts)) {
+    return json(400, { error: 'activeAccounts must be an array' });
+  }
+  if (body.discontinuedVendors !== undefined && !Array.isArray(body.discontinuedVendors)) {
+    return json(400, { error: 'discontinuedVendors must be an array' });
+  }
+  if (body.contactedVendors !== undefined && !Array.isArray(body.contactedVendors)) {
+    return json(400, { error: 'contactedVendors must be an array' });
+  }
+
+  // Read existing item so we can merge (partial update semantics)
+  const existing = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { userId: OWNER_USER_ID, sk: 'POS#VENDOR#SETTINGS' },
+    })
+  );
+  const prev = existing.Item ?? {};
+
+  const updatedAt = new Date().toISOString();
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: 'POS#VENDOR#SETTINGS',
+        activeAccounts: body.activeAccounts ?? prev['activeAccounts'] ?? [],
+        discontinuedVendors: body.discontinuedVendors ?? prev['discontinuedVendors'] ?? [],
+        contactedVendors: body.contactedVendors ?? prev['contactedVendors'] ?? [],
+        vendorOverrides: body.vendorOverrides ?? prev['vendorOverrides'] ?? {},
+        customContacts: body.customContacts ?? prev['customContacts'] ?? {},
+        updatedAt,
+      },
+    })
+  );
+
+  return json(200, { ok: true, updatedAt });
+}
+
 async function handleSyncStatus(): Promise<APIGatewayProxyResultV2> {
   const status = await getSyncStatus();
   if (!status) {
@@ -1329,6 +1427,10 @@ export const handler = async (
       return handleSyncStatus();
     case 'POST /pos/sync':
       return handleTriggerSync();
+    case 'GET /pos/vendor-settings':
+      return handleGetVendorSettings();
+    case 'PUT /pos/vendor-settings':
+      return handlePutVendorSettings(event);
     default:
       return json(404, { error: 'Route not found' });
   }

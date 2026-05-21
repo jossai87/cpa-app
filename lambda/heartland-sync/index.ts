@@ -373,8 +373,13 @@ async function syncInventory(secret: HeartlandSecret): Promise<{
 
   const lowStockItems = stockItems
     .filter((i) => i.qty_on_hand > 0 && i.qty_on_hand <= 3)
-    .sort((a, b) => a.qty_on_hand - b.qty_on_hand)
-    .slice(0, 50);
+    .sort((a, b) => {
+      // Primary: qty ascending (most urgent first)
+      if (a.qty_on_hand !== b.qty_on_hand) return a.qty_on_hand - b.qty_on_hand;
+      // Secondary: brand alphabetical so no single brand dominates
+      return (a.brand ?? '').localeCompare(b.brand ?? '');
+    })
+    .slice(0, 300); // raise cap — DynamoDB item is well under 400KB at this size
 
   const lowMarginItems = stockItems
     .filter((i) => i.margin !== null && i.margin < 20 && i.price > 0)
