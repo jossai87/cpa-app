@@ -161,25 +161,41 @@ async function syncPaymentsAndTickets(secret: HeartlandSecret): Promise<{
   paymentsScanned: number;
   ticketsScanned: number;
 }> {
-  // Payments — fetch last 30 pages (newest data)
-  const firstPage = await fetchPage<HeartlandPayment>(secret, 'payments?sort=completed_at', 1);
-  const totalPages = Math.ceil(firstPage.total / 200);
-  const startPage = Math.max(1, totalPages - 30);
+  // Use Central Time for date boundaries — Heartland stores local_completed_at
+  // in store-local (Central) time, so we must query the same way.
+  const STORE_TZ = 'America/Chicago';
+  const fmtDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: STORE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  });
+  const today = fmtDate.format(new Date());
+  // Sync a rolling 35-day window so we always have at least a full month of
+  // daily rollups, plus a buffer for late-arriving transactions.
+  const windowStart = new Date();
+  windowStart.setUTCDate(windowStart.getUTCDate() - 35);
+  const fromDate = fmtDate.format(windowStart);
 
-  const payments: HeartlandPayment[] = [];
-  for (let p = totalPages; p >= startPage; p--) {
-    const data = await fetchPage<HeartlandPayment>(secret, 'payments?sort=completed_at', p);
+  // Payments — filter by completed_at date range so we never miss a day
+  // regardless of how many total records exist in the account.
+  // sort=completed_at sorts ascending; we want newest-first for efficiency
+  // but the date filter is what guarantees completeness.
+  const paymentPath = `payments?sort=completed_at&completed_at[gte]=${fromDate}&completed_at[lte]=${today}`;
+  const firstPage = await fetchPage<HeartlandPayment>(secret, paymentPath, 1);
+  const totalPages = Math.ceil(firstPage.total / 200);
+
+  const payments: HeartlandPayment[] = [...firstPage.results];
+  for (let p = 2; p <= totalPages; p++) {
+    const data = await fetchPage<HeartlandPayment>(secret, paymentPath, p);
     payments.push(...data.results);
   }
 
-  // Tickets — fetch last 25 pages for enrichment (discounts, customers, reps)
-  const firstTPage = await fetchPage<HeartlandTicket>(secret, 'sales/tickets', 1);
+  // Tickets — same date-filtered approach for enrichment (discounts, customers, reps)
+  const ticketPath = `sales/tickets?completed_at[gte]=${fromDate}&completed_at[lte]=${today}`;
+  const firstTPage = await fetchPage<HeartlandTicket>(secret, ticketPath, 1);
   const totalTPages = Math.ceil(firstTPage.total / 200);
-  const startTPage = Math.max(1, totalTPages - 25);
 
-  const tickets: HeartlandTicket[] = [];
-  for (let p = totalTPages; p >= startTPage; p--) {
-    const data = await fetchPage<HeartlandTicket>(secret, 'sales/tickets', p);
+  const tickets: HeartlandTicket[] = [...firstTPage.results];
+  for (let p = 2; p <= totalTPages; p++) {
+    const data = await fetchPage<HeartlandTicket>(secret, ticketPath, p);
     tickets.push(...data.results);
   }
 

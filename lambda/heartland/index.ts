@@ -33,6 +33,7 @@ import {
 } from '@aws-sdk/lib-dynamodb';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { v4 as uuidv4 } from 'uuid';
+import { cacheVendorActivity, cacheStats } from '../gmail-analysis/cache';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -1202,6 +1203,88 @@ async function handleInsights(
   });
 }
 
+// ── GET /pos/vendor-health ───────────────────────────────────────────
+//
+// Joins POS brand performance (net sales YTD) with the local Gmail cache
+// (last 90 days of vendor email activity). One lightweight call powering
+// the Vendor Health row on the Sales & Revenue page.
+async function handleVendorHealth(): Promise<APIGatewayProxyResultV2> {
+  const reporting = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { userId: OWNER_USER_ID, sk: 'POS#REPORTING#SALES' },
+    })
+  );
+
+  type Row = Record<string, unknown>;
+  const brandRows = (reporting.Item?.['brandRows'] as Row[] | undefined) ?? [];
+
+  // Merge case-insensitively, top 10 by net sales
+  const merged = new Map<string, { brand: string; netSales: number; units: number }>();
+  for (const r of brandRows) {
+    const raw = ((r['item.custom@brand'] as string | undefined) ?? '').trim();
+    if (!raw) continue;
+    const key = raw.toUpperCase();
+    let entry = merged.get(key);
+    if (!entry) {
+      entry = { brand: raw, netSales: 0, units: 0 };
+      merged.set(key, entry);
+    }
+    entry.netSales += (r['source_sales.net_sales'] as number) ?? 0;
+    entry.units += (r['source_sales.net_qty_sold'] as number) ?? 0;
+  }
+  const topBrands = [...merged.values()]
+    .map((b) => ({
+      brand: b.brand,
+      netSalesYTD: Math.round(b.netSales * 100) / 100,
+      unitsYTD: b.units,
+    }))
+    .sort((a, b) => b.netSalesYTD - a.netSalesYTD)
+    .slice(0, 10);
+
+  // Pull email activity for each in parallel — cache.ts queries DDB only
+  const cache = await cacheStats();
+  const cacheReady = cache.totalCanonical > 0;
+
+  const enriched = await Promise.all(
+    topBrands.map(async (b) => {
+      let activity: Awaited<ReturnType<typeof cacheVendorActivity>> | null = null;
+      if (cacheReady) {
+        try {
+          activity = await cacheVendorActivity(b.brand, 90);
+        } catch {
+          /* swallow — vendor row should still render */
+        }
+      }
+      return {
+        ...b,
+        emailActivity: activity
+          ? {
+              messageCount: activity.messageCount,
+              lastContactDate: activity.lastContactDate,
+              topSenders: activity.topSenders.slice(0, 3),
+              topSubjects: activity.topSubjects.slice(0, 3),
+              recentMessageIds: activity.recentMessageIds.slice(0, 5),
+            }
+          : null,
+      };
+    })
+  );
+
+  return json(200, {
+    asOf: new Date().toISOString(),
+    cacheReady,
+    cacheCoverage: cacheReady
+      ? {
+          totalMessages: cache.totalCanonical,
+          oldestDate: cache.oldestDate,
+          newestDate: cache.newestDate,
+        }
+      : null,
+    brands: enriched,
+  });
+}
+
 // ── GET /pos/purchasing/orders/{id}/lines ────────────────────────────
 //
 // Returns the line items for a single PO. Called on-demand when the user
@@ -1291,6 +1374,7 @@ async function handleGetVendorSettings(): Promise<APIGatewayProxyResultV2> {
       activeAccounts: [],
       discontinuedVendors: [],
       contactedVendors: [],
+      contactNotes: {},
       vendorOverrides: {},
       customContacts: {},
       updatedAt: null,
@@ -1300,6 +1384,7 @@ async function handleGetVendorSettings(): Promise<APIGatewayProxyResultV2> {
     activeAccounts: result.Item['activeAccounts'] ?? [],
     discontinuedVendors: result.Item['discontinuedVendors'] ?? [],
     contactedVendors: result.Item['contactedVendors'] ?? [],
+    contactNotes: result.Item['contactNotes'] ?? {},
     vendorOverrides: result.Item['vendorOverrides'] ?? {},
     customContacts: result.Item['customContacts'] ?? {},
     updatedAt: result.Item['updatedAt'] ?? null,
@@ -1313,6 +1398,7 @@ async function handlePutVendorSettings(
     activeAccounts?: string[];
     discontinuedVendors?: string[];
     contactedVendors?: string[];
+    contactNotes?: Record<string, string>;
     vendorOverrides?: Record<string, unknown>;
     customContacts?: Record<string, unknown[]>;
   };
@@ -1352,6 +1438,7 @@ async function handlePutVendorSettings(
         activeAccounts: body.activeAccounts ?? prev['activeAccounts'] ?? [],
         discontinuedVendors: body.discontinuedVendors ?? prev['discontinuedVendors'] ?? [],
         contactedVendors: body.contactedVendors ?? prev['contactedVendors'] ?? [],
+        contactNotes: body.contactNotes ?? prev['contactNotes'] ?? {},
         vendorOverrides: body.vendorOverrides ?? prev['vendorOverrides'] ?? {},
         customContacts: body.customContacts ?? prev['customContacts'] ?? {},
         updatedAt,
@@ -1360,6 +1447,125 @@ async function handlePutVendorSettings(
   );
 
   return json(200, { ok: true, updatedAt });
+}
+
+// ── Admin settings (visibility overrides for non-admin users) ─────────
+//
+// Stored under the owner's partition. Writes are restricted to the admin
+// email — non-admin users can read but not modify.
+
+const ADMIN_EMAIL = 'jandoossai@gmail.com';
+
+function getCallerEmail(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
+  return ((event.requestContext.authorizer.jwt.claims['email'] as string | undefined) ?? '').toLowerCase();
+}
+
+async function handleGetAdminSettings(): Promise<APIGatewayProxyResultV2> {
+  const result = await docClient.send(
+    new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { userId: OWNER_USER_ID, sk: 'ADMIN#SETTINGS' },
+    })
+  );
+  return json(200, {
+    visibilityOverrides: result.Item?.['visibilityOverrides'] ?? {},
+    dailyTarget: result.Item?.['dailyTarget'] ?? 1500,
+    updatedAt: result.Item?.['updatedAt'] ?? null,
+  });
+}
+
+async function handlePutAdminSettings(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
+  const email = getCallerEmail(event);
+  if (email !== ADMIN_EMAIL.toLowerCase()) {
+    return json(403, { error: 'Only the admin can modify admin settings' });
+  }
+
+  let body: { visibilityOverrides?: Record<string, boolean>; dailyTarget?: number };
+  try {
+    body = JSON.parse(event.body ?? '{}') as typeof body;
+  } catch {
+    return json(400, { error: 'Invalid JSON body' });
+  }
+
+  if (body.visibilityOverrides && typeof body.visibilityOverrides !== 'object') {
+    return json(400, { error: 'visibilityOverrides must be an object' });
+  }
+  if (body.dailyTarget !== undefined && (typeof body.dailyTarget !== 'number' || body.dailyTarget < 0)) {
+    return json(400, { error: 'dailyTarget must be a positive number' });
+  }
+
+  // Read existing to merge fields not in the patch
+  const existing = await docClient.send(new GetCommand({
+    TableName: TABLE_NAME,
+    Key: { userId: OWNER_USER_ID, sk: 'ADMIN#SETTINGS' },
+  }));
+  const prev = existing.Item ?? {};
+
+  const updatedAt = new Date().toISOString();
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: 'ADMIN#SETTINGS',
+        visibilityOverrides: body.visibilityOverrides ?? prev['visibilityOverrides'] ?? {},
+        dailyTarget: body.dailyTarget ?? prev['dailyTarget'] ?? 1500,
+        updatedAt,
+        updatedBy: email,
+      },
+    })
+  );
+
+  return json(200, { ok: true, updatedAt });
+}
+
+// ── Email history (for the dashboard right-side feed) ────────────────
+
+async function handleGetEmails(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
+  const limit = Math.min(60, parseInt(event.queryStringParameters?.['limit'] ?? '30', 10));
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'userId = :uid AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: { ':uid': OWNER_USER_ID, ':prefix': 'EMAIL#' },
+      ScanIndexForward: false, // newest first
+      Limit: limit,
+    })
+  );
+  const emails = (result.Items ?? []).map((item) => ({
+    date: item['date'],
+    subject: item['subject'],
+    bodyText: item['bodyText'],
+    bodyHtml: item['bodyHtml'],
+    status: item['status'],
+    sendStatus: item['sendStatus'],
+    sendError: item['sendError'] ?? null,
+    generatedAt: item['generatedAt'],
+  }));
+  return json(200, { emails });
+}
+
+// Trigger a test send (admin only) — invokes the daily-report Lambda async
+async function handleTestEmail(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer
+): Promise<APIGatewayProxyResultV2> {
+  const email = getCallerEmail(event);
+  if (email !== ADMIN_EMAIL.toLowerCase()) {
+    return json(403, { error: 'Only the admin can trigger test emails' });
+  }
+  const fnName = process.env['DAILY_REPORT_FUNCTION_NAME'];
+  if (!fnName) return json(500, { error: 'Daily report function not configured' });
+
+  await lambdaClient.send(new InvokeCommand({
+    FunctionName: fnName,
+    InvocationType: 'Event', // async
+    Payload: Buffer.from(JSON.stringify({ trigger: 'manual' })),
+  }));
+  return json(202, { ok: true, message: 'Email generation queued — check the feed in 30-60 seconds.' });
 }
 
 async function handleSyncStatus(): Promise<APIGatewayProxyResultV2> {
@@ -1417,6 +1623,8 @@ export const handler = async (
       return handleStaff(event);
     case 'GET /pos/purchasing':
       return handlePurchasing();
+    case 'GET /pos/vendor-health':
+      return handleVendorHealth();
     case 'GET /pos/purchasing/orders/{id}/lines':
       return handlePurchaseOrderLines(event);
     case 'GET /pos/reporting':
@@ -1431,6 +1639,14 @@ export const handler = async (
       return handleGetVendorSettings();
     case 'PUT /pos/vendor-settings':
       return handlePutVendorSettings(event);
+    case 'GET /admin/settings':
+      return handleGetAdminSettings();
+    case 'PUT /admin/settings':
+      return handlePutAdminSettings(event);
+    case 'GET /admin/emails':
+      return handleGetEmails(event);
+    case 'POST /admin/test-email':
+      return handleTestEmail(event);
     default:
       return json(404, { error: 'Route not found' });
   }

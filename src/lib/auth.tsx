@@ -95,20 +95,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadUser]);
 
   const signOut = useCallback(async () => {
+    const domain = import.meta.env.VITE_COGNITO_DOMAIN as string;
+    const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID as string;
+    const appUrl = (import.meta.env.VITE_APP_URL as string).replace(/\/$/, '');
+    const logoutUri = encodeURIComponent(`${appUrl}/login`);
+    const cognitoLogoutUrl = `https://${domain}/logout?client_id=${clientId}&logout_uri=${logoutUri}`;
+
+    // Set flag so post-redirect Login page knows not to auto re-authenticate.
+    // sessionStorage survives across the Cognito redirect since it's same-origin.
     try {
-      // Clear local Amplify session first
+      window.sessionStorage.setItem('justSignedOut', '1');
+    } catch {
+      // Storage may be unavailable (private mode) — ignore
+    }
+
+    // Try Amplify's clean signOut first
+    try {
       await amplifySignOut({ global: false });
     } catch {
-      // Ignore — we still want to redirect
-    } finally {
-      setUser(null);
-      // Redirect through Cognito hosted UI logout to clear the session cookie.
-      // Without this, Cognito auto-logs the user back in immediately.
-      const domain = import.meta.env.VITE_COGNITO_DOMAIN as string;
-      const clientId = import.meta.env.VITE_COGNITO_CLIENT_ID as string;
-      const logoutUri = encodeURIComponent((import.meta.env.VITE_APP_URL as string) + '/');
-      window.location.href = `https://${domain}/logout?client_id=${clientId}&logout_uri=${logoutUri}`;
+      // Ignore — we'll force-clear below
     }
+
+    // Aggressively clear ALL Cognito tokens from localStorage. Amplify may
+    // leave stale refresh tokens behind that auto-restore the session on
+    // the next page load.
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && (k.startsWith('CognitoIdentityServiceProvider') || k.includes('amplify'))) {
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+    } catch {
+      // Ignore
+    }
+
+    // Hard redirect — bypasses React Router entirely
+    window.location.replace(cognitoLogoutUrl);
   }, []);
 
   return (

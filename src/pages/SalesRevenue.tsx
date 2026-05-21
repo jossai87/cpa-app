@@ -17,12 +17,16 @@ import {
   StickyNote,
   X,
   Trophy,
+  Info,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
+import { useAdmin } from '../lib/admin';
 import Spinner from '../components/Spinner';
 import CentralTimeBadge from '../components/CentralTimeBadge';
 import { downloadCsvSections, stampedName, csvNum, type CsvSection } from '../lib/csv';
+import SalesChat from '../components/SalesChat';
+import VendorHealthCard from '../components/VendorHealthCard';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -291,6 +295,24 @@ function relativeTime(iso: string | null | undefined): string {
 }
 
 // ── Shared components ─────────────────────────────────────────────────
+
+// ── BenchmarkTip — hover tooltip showing expected benchmark for a metric ──
+function BenchmarkTip({ lines }: { lines: string[] }) {
+  return (
+    <div className="relative group inline-flex items-center">
+      <Info className="w-3.5 h-3.5 text-slate-400 hover:text-blue-500 cursor-help transition-colors" />
+      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-50 w-64 pointer-events-none">
+        <div className="bg-slate-800 text-white text-[11px] rounded-lg px-3 py-2.5 shadow-xl leading-relaxed">
+          <p className="font-semibold text-slate-200 mb-1.5 text-xs">Benchmark for your store</p>
+          {lines.map((line, i) => (
+            <p key={i} className="text-slate-300">{line}</p>
+          ))}
+        </div>
+        <div className="w-2 h-2 bg-slate-800 rotate-45 mx-auto -mt-1" />
+      </div>
+    </div>
+  );
+}
 
 function StatCard({ label, value, sub, icon: Icon, color = 'blue' }: {
   label: string; value: string; sub?: string;
@@ -629,6 +651,11 @@ type Tab = 'overview' | 'analytics' | 'inventory' | 'staff' | 'purchasing' | 're
 
 export default function SalesRevenue() {
   const [tab, setTab] = useState<Tab>('overview');
+  const { isVisible } = useAdmin();
+  // Memoize per-feature visibility flags so the values are stable across renders
+  const showTotalRevenueCard = isVisible('sales.trends.totalRevenue');
+  const showAvgTicketCard = isVisible('sales.trends.avgTicket');
+  const showReportingTab = isVisible('sales.tab.reporting');
   const [analyticsDays, setAnalyticsDays] = useState(7);
   const [stockBrandFilter, setStockBrandFilter] = useState('');
 
@@ -857,6 +884,7 @@ export default function SalesRevenue() {
     activeAccounts: string[];
     discontinuedVendors: string[];
     contactedVendors: string[];
+    contactNotes: Record<string, string>;
     vendorOverrides: Record<string, VendorOverride>;
     customContacts: Record<string, VendorContact[]>;
     updatedAt: string | null;
@@ -880,6 +908,7 @@ export default function SalesRevenue() {
   const activeAccounts = new Set<string>(vendorSettingsQ.data?.activeAccounts ?? []);
   const discontinuedVendors = new Set<string>(vendorSettingsQ.data?.discontinuedVendors ?? []);
   const contactedVendors = new Set<string>(vendorSettingsQ.data?.contactedVendors ?? []);
+  const contactNotes: Record<string, string> = vendorSettingsQ.data?.contactNotes ?? {};
   // vendorOverrides keys come back as strings from JSON; cast to number-keyed for compat
   const vendorOverrides: Record<number, VendorOverride> = Object.fromEntries(
     Object.entries(vendorSettingsQ.data?.vendorOverrides ?? {}).map(([k, v]) => [Number(k), v])
@@ -894,6 +923,7 @@ export default function SalesRevenue() {
       activeAccounts: [...activeAccounts],
       discontinuedVendors: [...discontinuedVendors],
       contactedVendors: [...contactedVendors],
+      contactNotes,
       vendorOverrides: Object.fromEntries(Object.entries(vendorOverrides).map(([k, v]) => [String(k), v])),
       customContacts: Object.fromEntries(Object.entries(customContacts).map(([k, v]) => [String(k), v])),
       ...patch,
@@ -908,7 +938,14 @@ export default function SalesRevenue() {
       if (!window.confirm(`Mark "${vendorName}" as having an active account?`)) return;
       const next = new Set(activeAccounts);
       next.add(key);
-      vendorSettingsMutation.mutate(buildSettingsUpdate({ activeAccounts: [...next] }));
+      // Clear the contacted flag (account is now active so contacted state is moot)
+      // but KEEP the note — it's valuable history about how the relationship started.
+      const nextContacted = new Set(contactedVendors);
+      nextContacted.delete(key);
+      vendorSettingsMutation.mutate(buildSettingsUpdate({
+        activeAccounts: [...next],
+        contactedVendors: [...nextContacted],
+      }));
     } else {
       if (!window.confirm(`Remove the active account mark for "${vendorName}"?`)) return;
       const next = new Set(activeAccounts);
@@ -936,6 +973,12 @@ export default function SalesRevenue() {
     const next = new Set(contactedVendors);
     if (checked) next.add(key); else next.delete(key);
     vendorSettingsMutation.mutate(buildSettingsUpdate({ contactedVendors: [...next] }));
+  }
+
+  function handleContactNoteChange(key: string, note: string) {
+    const next = { ...contactNotes, [key]: note };
+    if (!note.trim()) delete next[key];
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ contactNotes: next }));
   }
 
   function saveVendorCard(vendorId: number) {
@@ -1008,12 +1051,12 @@ export default function SalesRevenue() {
 
   const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
     { id: 'overview', label: 'Overview', icon: TrendingUp },
-    { id: 'analytics', label: 'Analytics', icon: BarChart3Icon },
-    { id: 'insights', label: 'Insights', icon: LightbulbIcon },
+    { id: 'purchasing', label: 'Purchasing', icon: ShoppingBag },
+    { id: 'analytics', label: 'Trends', icon: BarChart3Icon },
+    { id: 'insights', label: 'Performance', icon: LightbulbIcon },
     { id: 'inventory', label: 'Inventory', icon: Package },
     { id: 'staff', label: 'Staff', icon: Users },
-    { id: 'purchasing', label: 'Purchasing', icon: ShoppingBag },
-    { id: 'reporting', label: 'Reporting', icon: BarChart3Icon },
+    ...(showReportingTab ? [{ id: 'reporting' as const, label: 'Reporting', icon: BarChart3Icon }] : []),
   ];
 
   function refetchCurrent() {
@@ -1469,8 +1512,7 @@ export default function SalesRevenue() {
   return (
     <div className="min-h-screen bg-slate-50">
       <header className="bg-white border-b border-slate-200 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
-          <Link to="/" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900 transition-colors">
+        <div className="max-w-7xl mx-auto flex items-center gap-4">          <Link to="/" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900 transition-colors">
             <ArrowLeft className="w-4 h-4" />
             Dashboard
           </Link>
@@ -1630,15 +1672,50 @@ export default function SalesRevenue() {
             {dashQ.data && (
               <>
                 {/* ── Alerts + Notes row ── */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
                   {/* Alerts */}
                   <AlertsPanel alerts={dashQ.data.alerts} onNavigate={setTab} />
                   {/* Notes */}
-                  <NotesPanel />
+                  <div className="min-w-0 overflow-hidden">
+                    <NotesPanel />
+                  </div>
                 </div>
 
                 {/* ── KPI metric cards (vs last year) ── */}
                 <KpiGrid data={dashQ.data} reportingData={reportingQ.data ?? null} filterStart={filterStart} filterEnd={filterEnd} />
+
+                {/* ── Inventory Turn Rate — compact overview card ── */}
+                {inventoryQ.data && !inventoryQ.data.notReady && (() => {
+                  const invTurn = (() => {
+                    const totalCost = (inventoryQ.data?.byDepartment ?? []).reduce((s, d) => s + d.totalCost, 0);
+                    const ytdNet = reportingQ.data?.summary?.totalNetSales ?? dashQ.data.yearToDate.totalAmount;
+                    return totalCost > 0 ? Math.round((ytdNet / totalCost) * 10) / 10 : null;
+                  })();
+                  if (invTurn === null) return null;
+                  const color = invTurn >= 3 ? 'text-emerald-600' : invTurn >= 2 ? 'text-amber-600' : 'text-red-600';
+                  const bg = invTurn >= 3 ? 'bg-emerald-50 border-emerald-200' : invTurn >= 2 ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200';
+                  return (
+                    <div className={`rounded-xl border px-5 py-3 flex items-center gap-4 ${bg}`}>
+                      <Package className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Inventory Turn Rate</p>
+                          <BenchmarkTip lines={[
+                            'Specialty footwear benchmark: 2–4× per year.',
+                            '< 2× — slow-moving stock, consider markdowns.',
+                            '2–3× — moderate, monitor clearance candidates.',
+                            '≥ 3× — healthy, inventory moving well.',
+                            'Calculated as YTD net sales ÷ inventory cost value.',
+                          ]} />
+                        </div>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          {invTurn >= 3 ? '✓ Healthy — inventory is moving well.' : invTurn >= 2 ? '⚠ Moderate — some slow-moving stock.' : '⚠ Low — significant capital tied up in slow inventory.'}
+                        </p>
+                      </div>
+                      <p className={`text-3xl font-bold flex-shrink-0 ${color}`}>{invTurn}×</p>
+                    </div>
+                  );
+                })()}
 
                 {/* ── Two-column: Net Sales by Hour + Top Performers ── */}
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1768,34 +1845,25 @@ export default function SalesRevenue() {
                 <>
                   {/* Summary row */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <StatCard label="Total Revenue" value={fmt(d.summary.totalAmount)} sub={`${d.summary.totalCount.toLocaleString()} transactions`} icon={TrendingUp} color="blue" />
-                    <StatCard label="Avg Ticket" value={fmtDec(d.summary.avgTicket)} sub="per transaction" icon={ShoppingBag} color="green" />
+                    {showTotalRevenueCard && (
+                      <StatCard label="Total Revenue" value={fmt(d.summary.totalAmount)} sub={`${d.summary.totalCount.toLocaleString()} transactions`} icon={TrendingUp} color="blue" />
+                    )}
+                    {showAvgTicketCard && (
+                      <StatCard label="Avg Ticket" value={fmtDec(d.summary.avgTicket)} sub="per transaction" icon={ShoppingBag} color="green" />
+                    )}
                     <StatCard label="Total Discounts" value={fmt(d.discountSummary.totalDiscounts)} sub={`${fmtPct(d.discountSummary.discountRate)} discount rate`} icon={Tag} color="amber" />
                   </div>
 
-                  {/* Daily trend */}
-                  <div className="bg-white rounded-lg border border-slate-200 p-5">
-                    <h3 className="text-sm font-semibold text-slate-900 mb-1">Daily Revenue Trend</h3>
-                    <p className="text-xs text-slate-500 mb-4">{fmtDate(d.fromDate)} – {fmtDate(d.toDate)} · Hover any point for details. All times Central.</p>
-                    <LineChart
-                      data={d.dailyTrend.map((r) => ({
-                        date: r.date,
-                        amount: r.amount,
-                        meta: { transactions: r.count },
-                      }))}
-                      height={d.dailyTrend.length <= 7 ? 240 : 280}
-                      yLabel="Revenue ($)"
-                      xLabel="Date"
-                      tooltipExtra={(p) => {
-                        const txn = (p.meta?.transactions as number) ?? 0;
-                        if (!txn) return null;
-                        const avg = p.amount / txn;
-                        return `${txn.toLocaleString()} ticket${txn === 1 ? '' : 's'} · avg $${avg.toFixed(2)}`;
-                      }}
-                    />
-                  </div>
-
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Hourly heatmap */}
+                    <div className="bg-white rounded-lg border border-slate-200 p-5">
+                      <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-slate-400" /> Peak Hours
+                      </h3>
+                      <HourlyHeatmap data={d.hourlyHeatmap} />
+                      <p className="text-xs text-slate-400 mt-3">Darker = more revenue. Based on local store time.</p>
+                    </div>
+
                     {/* Payment methods */}
                     <div className="bg-white rounded-lg border border-slate-200 p-5">
                       <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
@@ -1809,15 +1877,6 @@ export default function SalesRevenue() {
                           </div>
                         ))}
                       </div>
-                    </div>
-
-                    {/* Hourly heatmap */}
-                    <div className="bg-white rounded-lg border border-slate-200 p-5">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
-                        <Clock className="w-4 h-4 text-slate-400" /> Peak Hours
-                      </h3>
-                      <HourlyHeatmap data={d.hourlyHeatmap} />
-                      <p className="text-xs text-slate-400 mt-3">Darker = more revenue. Based on local store time.</p>
                     </div>
                   </div>
 
@@ -1854,6 +1913,28 @@ export default function SalesRevenue() {
                       )}
                     </div>
                   </div>
+
+                  {/* Daily trend — bottom of page */}
+                  <div className="bg-white rounded-lg border border-slate-200 p-5">
+                    <h3 className="text-sm font-semibold text-slate-900 mb-1">Daily Revenue Trend</h3>
+                    <p className="text-xs text-slate-500 mb-4">{fmtDate(d.fromDate)} – {fmtDate(d.toDate)} · Hover any point for details. All times Central.</p>
+                    <LineChart
+                      data={d.dailyTrend.map((r) => ({
+                        date: r.date,
+                        amount: r.amount,
+                        meta: { transactions: r.count },
+                      }))}
+                      height={d.dailyTrend.length <= 7 ? 240 : 280}
+                      yLabel="Revenue ($)"
+                      xLabel="Date"
+                      tooltipExtra={(p) => {
+                        const txn = (p.meta?.transactions as number) ?? 0;
+                        if (!txn) return null;
+                        const avg = p.amount / txn;
+                        return `${txn.toLocaleString()} ticket${txn === 1 ? '' : 's'} · avg $${avg.toFixed(2)}`;
+                      }}
+                    />
+                  </div>
                 </>
               );
             })()}
@@ -1877,13 +1958,137 @@ export default function SalesRevenue() {
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <StatCard label="Total Items" value={d.summary.totalItems.toLocaleString()} sub={`${d.summary.activeItems.toLocaleString()} active in catalog`} icon={Package} color="blue" />
                     <StatCard label="Live Catalog" value={(d.summary.liveItems ?? d.summary.itemsWithCostData).toLocaleString()} sub="active + cost+price set" icon={Package} color="green" />
-                    <StatCard label="Avg Gross Margin" value={fmtPct(d.summary.overallAvgMarginPct)} sub="across live items" icon={TrendingUp} color="purple" />
+                    <div className="bg-white rounded-lg border border-slate-200 p-5 flex flex-col gap-1">
+                      <div className="flex items-center gap-1.5">
+                        <TrendingUp className="w-4 h-4 text-purple-500" />
+                        <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Avg Gross Margin</p>
+                        <BenchmarkTip lines={[
+                          'Specialty footwear benchmark: 45–55% gross margin.',
+                          '< 40% — below industry average, review pricing or COGS.',
+                          '40–50% — typical for independent footwear retailers.',
+                          '> 50% — strong margin, good pricing power.',
+                          'Calculated as (price − cost) ÷ price across all live SKUs.',
+                        ]} />
+                      </div>
+                      <p className="text-2xl font-bold text-slate-900">{fmtPct(d.summary.overallAvgMarginPct)}</p>
+                      <p className="text-xs text-slate-400">across live items</p>
+                    </div>
                     <div className="bg-white rounded-lg border border-slate-200 p-5">
                       <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Last Synced</p>
                       <p className="text-sm font-medium text-slate-700 mt-1">{relativeTime(d.cachedAt)}</p>
                       <p className="text-xs text-slate-400 mt-0.5">{d.cachedAt ? new Date(d.cachedAt).toLocaleString() : '—'}</p>
                     </div>
                   </div>
+
+                  {/* Low stock items — moved to second row for visibility */}
+                  {d.lowStockItems && d.lowStockItems.length > 0 && (() => {
+                    const items = d.lowStockItems!;
+                    const allBrands = [...new Set(items.map((i) => i.brand).filter(Boolean))].sort();
+                    const filtered = stockBrandFilter
+                      ? items.filter((i) => i.brand === stockBrandFilter)
+                      : items;
+
+                    function baseStyle(desc: string): string {
+                      return desc.replace(/\s*[-–]\s*\d+(\.\d+)?$/, '').trim();
+                    }
+                    type StockItem = typeof items[0];
+                    const groups = new Map<string, { base: string; brand: string; price: number; items: StockItem[] }>();
+                    for (const item of filtered) {
+                      const base = baseStyle(item.description);
+                      const key = `${item.brand}||${base}`;
+                      if (!groups.has(key)) groups.set(key, { base, brand: item.brand, price: item.price, items: [] });
+                      groups.get(key)!.items.push(item);
+                    }
+                    const groupList = [...groups.values()].sort((a, b) => {
+                      const minA = Math.min(...a.items.map((i) => i.qty_on_hand));
+                      const minB = Math.min(...b.items.map((i) => i.qty_on_hand));
+                      if (minA !== minB) return minA - minB;
+                      return a.brand.localeCompare(b.brand);
+                    });
+
+                    return (
+                      <div className="bg-white rounded-lg border border-red-200 p-5">
+                        <div className="flex items-start justify-between gap-4 mb-1">
+                          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                            <Package className="w-4 h-4 text-red-500" /> Low Stock Alert (≤3 units)
+                          </h3>
+                          <span className="text-xs text-slate-400 flex-shrink-0">
+                            {groupList.length} styles · {filtered.length} SKUs · {allBrands.length} brands
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 mb-3">Items at Flower Mound with 3 or fewer units on hand. Grouped by style — click a row to see vendor contact info.</p>
+
+                        <div className="flex items-center gap-2 mb-4 flex-wrap">
+                          <span className="text-xs text-slate-500 flex-shrink-0">Brand:</span>
+                          <button onClick={() => setStockBrandFilter('')}
+                            className={`text-xs px-2.5 py-1 rounded-full border transition ${!stockBrandFilter ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                            All ({items.length})
+                          </button>
+                          {allBrands.map((b) => (
+                            <button key={b} onClick={() => setStockBrandFilter(b === stockBrandFilter ? '' : b)}
+                              className={`text-xs px-2.5 py-1 rounded-full border transition ${stockBrandFilter === b ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
+                              {b} ({items.filter((i) => i.brand === b).length})
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="border-b border-slate-100">
+                                <th className="text-left py-2 text-slate-500 font-medium">Style</th>
+                                <th className="text-left py-2 text-slate-500 font-medium">Brand</th>
+                                <th className="text-left py-2 text-slate-500 font-medium">Sizes on Hand</th>
+                                <th className="text-right py-2 text-slate-500 font-medium">SKUs</th>
+                                <th className="text-right py-2 text-slate-500 font-medium">Price</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50">
+                              {groupList.map((g) => {
+                                const sizes = g.items
+                                  .map((i) => {
+                                    const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
+                                    return m ? m[1] : i.sku;
+                                  })
+                                  .sort((a, b) => parseFloat(a) - parseFloat(b));
+                                const minQty = Math.min(...g.items.map((i) => i.qty_on_hand));
+                                const key = `${g.brand}||${g.base}`;
+                                return (
+                                  <tr key={key} className="hover:bg-red-50 cursor-pointer transition-colors" onClick={() => setLowStockContactBrand(g.brand)}>
+                                    <td className="py-2 text-slate-700 max-w-[260px]">
+                                      <span className="font-medium">{g.base}</span>
+                                    </td>
+                                    <td className="py-2 text-blue-600 font-medium">{g.brand}</td>
+                                    <td className="py-2">
+                                      <div className="flex flex-wrap gap-1">
+                                        {sizes.map((s, si) => {
+                                          const item = g.items.find((i) => {
+                                            const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
+                                            return (m ? m[1] : i.sku) === s;
+                                          });
+                                          const qty = item?.qty_on_hand ?? 1;
+                                          return (
+                                            <span key={si}
+                                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${qty <= 1 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                              {s}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                    </td>
+                                    <td className={`py-2 text-right font-semibold ${minQty <= 1 ? 'text-red-600' : 'text-amber-600'}`}>
+                                      {g.items.length}
+                                    </td>
+                                    <td className="py-2 text-right text-slate-600">{fmtDec(g.price)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* By department */}
@@ -1943,121 +2148,6 @@ export default function SalesRevenue() {
                       </div>
                     </div>
                   )}
-
-                  {/* Low stock items — grouped by style, brand filter at top */}
-                  {d.lowStockItems && d.lowStockItems.length > 0 && (() => {
-                    const items = d.lowStockItems!;
-                    const allBrands = [...new Set(items.map((i) => i.brand).filter(Boolean))].sort();
-                    const filtered = stockBrandFilter
-                      ? items.filter((i) => i.brand === stockBrandFilter)
-                      : items;
-
-                    // Group by brand + base style (strip trailing size number)
-                    function baseStyle(desc: string): string {
-                      return desc.replace(/\s*[-–]\s*\d+(\.\d+)?$/, '').trim();
-                    }
-                    type StockItem = typeof items[0];
-                    const groups = new Map<string, { base: string; brand: string; price: number; items: StockItem[] }>();
-                    for (const item of filtered) {
-                      const base = baseStyle(item.description);
-                      const key = `${item.brand}||${base}`;
-                      if (!groups.has(key)) groups.set(key, { base, brand: item.brand, price: item.price, items: [] });
-                      groups.get(key)!.items.push(item);
-                    }
-                    const groupList = [...groups.values()].sort((a, b) => {
-                      // Sort by min qty_on_hand in group (most urgent first), then brand
-                      const minA = Math.min(...a.items.map((i) => i.qty_on_hand));
-                      const minB = Math.min(...b.items.map((i) => i.qty_on_hand));
-                      if (minA !== minB) return minA - minB;
-                      return a.brand.localeCompare(b.brand);
-                    });
-
-                    return (
-                      <div className="bg-white rounded-lg border border-red-200 p-5">
-                        <div className="flex items-start justify-between gap-4 mb-1">
-                          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                            <Package className="w-4 h-4 text-red-500" /> Low Stock Alert (≤3 units)
-                          </h3>
-                          <span className="text-xs text-slate-400 flex-shrink-0">
-                            {groupList.length} styles · {filtered.length} SKUs · {allBrands.length} brands
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 mb-3">Items at Flower Mound with 3 or fewer units on hand. Grouped by style — click a row to see vendor contact info.</p>
-
-                        {/* Brand filter pills */}
-                        <div className="flex items-center gap-2 mb-4 flex-wrap">
-                          <span className="text-xs text-slate-500 flex-shrink-0">Brand:</span>
-                          <button onClick={() => setStockBrandFilter('')}
-                            className={`text-xs px-2.5 py-1 rounded-full border transition ${!stockBrandFilter ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                            All ({items.length})
-                          </button>
-                          {allBrands.map((b) => (
-                            <button key={b} onClick={() => setStockBrandFilter(b === stockBrandFilter ? '' : b)}
-                              className={`text-xs px-2.5 py-1 rounded-full border transition ${stockBrandFilter === b ? 'bg-red-500 text-white border-red-500' : 'border-slate-200 text-slate-500 hover:bg-slate-50'}`}>
-                              {b} ({items.filter((i) => i.brand === b).length})
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Grouped table */}
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-xs">
-                            <thead>
-                              <tr className="border-b border-slate-100">
-                                <th className="text-left py-2 text-slate-500 font-medium">Style</th>
-                                <th className="text-left py-2 text-slate-500 font-medium">Brand</th>
-                                <th className="text-left py-2 text-slate-500 font-medium">Sizes on Hand</th>
-                                <th className="text-right py-2 text-slate-500 font-medium">SKUs</th>
-                                <th className="text-right py-2 text-slate-500 font-medium">Price</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-50">
-                              {groupList.map((g) => {
-                                // Extract size from end of description
-                                const sizes = g.items
-                                  .map((i) => {
-                                    const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
-                                    return m ? m[1] : i.sku;
-                                  })
-                                  .sort((a, b) => parseFloat(a) - parseFloat(b));
-                                const minQty = Math.min(...g.items.map((i) => i.qty_on_hand));
-                                const key = `${g.brand}||${g.base}`;
-                                return (
-                                  <tr key={key} className="hover:bg-red-50 cursor-pointer transition-colors" onClick={() => setLowStockContactBrand(g.brand)}>
-                                    <td className="py-2 text-slate-700 max-w-[260px]">
-                                      <span className="font-medium">{g.base}</span>
-                                    </td>
-                                    <td className="py-2 text-blue-600 font-medium">{g.brand}</td>
-                                    <td className="py-2">
-                                      <div className="flex flex-wrap gap-1">
-                                        {sizes.map((s, si) => {
-                                          const item = g.items.find((i) => {
-                                            const m = i.description.match(/[-–]\s*(\d+(?:\.\d+)?)$/);
-                                            return (m ? m[1] : i.sku) === s;
-                                          });
-                                          const qty = item?.qty_on_hand ?? 1;
-                                          return (
-                                            <span key={si}
-                                              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${qty <= 1 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
-                                              {s}
-                                            </span>
-                                          );
-                                        })}
-                                      </div>
-                                    </td>
-                                    <td className={`py-2 text-right font-semibold ${minQty <= 1 ? 'text-red-600' : 'text-amber-600'}`}>
-                                      {g.items.length}
-                                    </td>
-                                    <td className="py-2 text-right text-slate-600">{fmtDec(g.price)}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    );
-                  })()}
                 </>
               );
             })()}
@@ -2128,8 +2218,32 @@ export default function SalesRevenue() {
                 d.fromDate && d.toDate
                   ? `${d.fromDate} – ${d.toDate}`
                   : '';
+
+              // Becky's commission — 4% of her total sales for the selected period.
+              // Match by name (case-insensitive, accepts "Becky" or starts with "becky").
+              const beckyRow = d.staff.find((s) =>
+                (s.name ?? '').toLowerCase().includes('becky') ||
+                (s.rawName ?? '').toLowerCase().includes('becky')
+              );
+              const beckyAmount = beckyRow ? (beckyRow.amount ?? beckyRow.ytdAmount ?? 0) : 0;
+              const beckyCommission = beckyAmount * 0.04;
+
               return (
                 <>
+                  {/* Becky commission — admin-only */}
+                  {isVisible('sales.staff.beckyCommission') && beckyRow && (
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 flex items-center gap-4">
+                      <div className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-full bg-emerald-100">
+                        <Trophy className="w-6 h-6 text-emerald-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide">Becky Commission ({periodLabel})</p>
+                        <p className="text-[10px] text-emerald-600 mt-0.5">4% of {fmt(beckyAmount)} total sales · paid end of month</p>
+                      </div>
+                      <p className="text-3xl font-bold text-emerald-700 flex-shrink-0">{fmt(beckyCommission)}</p>
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between flex-wrap gap-2">
                     <p className="text-sm text-slate-600">
                       {periodLabel}
@@ -2289,6 +2403,13 @@ export default function SalesRevenue() {
                     <div className="bg-white rounded-lg border border-slate-200 p-5">
                       <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
                         <Users className="w-4 h-4 text-slate-400" /> Customer Retention (YTD)
+                        <BenchmarkTip lines={[
+                          'Specialty footwear benchmark: 25–40% repeat rate.',
+                          '< 20% — low loyalty; consider follow-up outreach or loyalty program.',
+                          '20–30% — average for independent footwear retailers.',
+                          '> 35% — strong loyalty, customers are coming back.',
+                          'Repeat buyer = customer with 2+ transactions in the period.',
+                        ]} />
                       </h3>
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                         <div className="text-center">
@@ -2322,6 +2443,13 @@ export default function SalesRevenue() {
                     <div className="bg-white rounded-lg border border-slate-200 p-5">
                       <h3 className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
                         <Tag className="w-4 h-4 text-slate-400" /> Return Rate by Brand (YTD)
+                        <BenchmarkTip lines={[
+                          'Specialty footwear benchmark: < 8% return rate.',
+                          '< 5% — excellent; very few fit or quality issues.',
+                          '5–8% — normal range for specialty footwear.',
+                          '8–15% — elevated; investigate fit, sizing, or quality.',
+                          '> 15% — high; may indicate a systemic issue with that brand.',
+                        ]} />
                       </h3>
                       <p className="text-xs text-slate-500 mb-4">Brands with high return rates may indicate fit issues, quality problems, or customer expectation mismatches. Benchmark: &lt;8% for specialty footwear.</p>
                       <div className="space-y-2">
@@ -2343,42 +2471,37 @@ export default function SalesRevenue() {
                     </div>
                   )}
 
-                  {/* Inventory Turn + Reorder Alerts */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Inventory turn */}
-                    <div className="bg-white rounded-lg border border-slate-200 p-5">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
-                        <Package className="w-4 h-4 text-slate-400" /> Inventory Turn Rate
-                      </h3>
-                      {inventoryTurn !== null ? (
-                        <>
-                          <div className="text-center py-4">
-                            <p className={`text-4xl font-bold ${inventoryTurn >= 3 ? 'text-emerald-600' : inventoryTurn >= 2 ? 'text-amber-600' : 'text-red-600'}`}>
-                              {inventoryTurn}×
-                            </p>
-                            <p className="text-sm text-slate-500 mt-1">turns per year</p>
-                          </div>
-                          <div className="bg-slate-50 rounded p-3 text-xs text-slate-600">
-                            {inventoryTurn >= 3 ? '✓ Healthy — inventory is moving well.' : inventoryTurn >= 2 ? '⚠ Moderate — some slow-moving stock. Review clearance candidates.' : '⚠ Low — significant capital tied up in slow inventory. Consider markdowns.'}
-                            {' '}Specialty footwear benchmark: 2–4× per year. Calculated as YTD net sales ÷ inventory cost value.
-                          </div>
-                        </>
-                      ) : usingPrior ? (
-                        <p className="text-sm text-slate-400 italic">Inventory turn is calculated against current stock levels — not available for prior-year views.</p>
-                      ) : (
-                        <p className="text-sm text-slate-400 italic">Requires inventory sync to calculate.</p>
-                      )}
-                    </div>
-
-                    {/* Reorder alerts — consolidated into Low Stock Alert table below */}
-                    <div className="bg-white rounded-lg border border-slate-200 p-5 flex flex-col justify-center">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-2 flex items-center gap-2">
-                        <Package className="w-4 h-4 text-red-400" /> Reorder Alerts
-                      </h3>
-                      <p className="text-xs text-slate-500 leading-relaxed">
-                        Low-stock items (≤3 units) are shown in the <span className="font-medium text-slate-700">Low Stock Alert</span> table below — click any row to see full vendor contact info.
-                      </p>
-                    </div>
+                  {/* Inventory Turn Rate */}
+                  <div className="bg-white rounded-lg border border-slate-200 p-5">
+                    <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                      <Package className="w-4 h-4 text-slate-400" /> Inventory Turn Rate
+                      <BenchmarkTip lines={[
+                        'Specialty footwear benchmark: 2–4× per year.',
+                        '< 2× — slow-moving stock; consider markdowns or clearance.',
+                        '2–3× — moderate; monitor slow-moving categories.',
+                        '≥ 3× — healthy; inventory is moving well.',
+                        'Formula: YTD net sales ÷ total inventory cost value.',
+                        'Your store carries ~$' + (inventoryQ.data ? Math.round((inventoryQ.data.byDepartment ?? []).reduce((s: number, d: {totalCost: number}) => s + d.totalCost, 0) / 1000) + 'K' : '?') + ' in inventory cost.',
+                      ]} />
+                    </h3>
+                    {inventoryTurn !== null ? (
+                      <>
+                        <div className="text-center py-4">
+                          <p className={`text-4xl font-bold ${inventoryTurn >= 3 ? 'text-emerald-600' : inventoryTurn >= 2 ? 'text-amber-600' : 'text-red-600'}`}>
+                            {inventoryTurn}×
+                          </p>
+                          <p className="text-sm text-slate-500 mt-1">turns per year</p>
+                        </div>
+                        <div className="bg-slate-50 rounded p-3 text-xs text-slate-600">
+                          {inventoryTurn >= 3 ? '✓ Healthy — inventory is moving well.' : inventoryTurn >= 2 ? '⚠ Moderate — some slow-moving stock. Review clearance candidates.' : '⚠ Low — significant capital tied up in slow inventory. Consider markdowns.'}
+                          {' '}Specialty footwear benchmark: 2–4× per year. Calculated as YTD net sales ÷ inventory cost value.
+                        </div>
+                      </>
+                    ) : usingPrior ? (
+                      <p className="text-sm text-slate-400 italic">Inventory turn is calculated against current stock levels — not available for prior-year views.</p>
+                    ) : (
+                      <p className="text-sm text-slate-400 italic">Requires inventory sync to calculate.</p>
+                    )}
                   </div>
                 </>
               );
@@ -2390,6 +2513,7 @@ export default function SalesRevenue() {
         {/* ── PURCHASING TAB ── */}
         {tab === 'purchasing' && (
           <div className="space-y-6">
+            <VendorHealthCard />
             {purchasingQ.isLoading && <LoadingState label="Loading purchasing data…" />}
             {purchasingQ.isError && <ErrorState error={purchasingQ.error} />}
             {purchasingQ.data?.notReady && (
@@ -2560,6 +2684,24 @@ export default function SalesRevenue() {
                                   )}
                                 </div>
                               </div>
+
+                              {/* ── Comments (shown on contacted/yellow OR active/green cards) ── */}
+                              {(isContacted || hasAccount) && (
+                                <div className="mt-1.5 mb-1">
+                                  <textarea
+                                    rows={2}
+                                    key={`note-${key}`}
+                                    defaultValue={contactNotes[key] ?? ''}
+                                    onBlur={(e) => handleContactNoteChange(key, e.target.value)}
+                                    placeholder={hasAccount ? 'Comments about this account…' : 'Notes about this contact…'}
+                                    className={`w-full text-[11px] rounded-lg px-2.5 py-1.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 resize-none ${
+                                      hasAccount
+                                        ? 'border border-emerald-200 bg-emerald-50 focus:ring-emerald-400'
+                                        : 'border border-yellow-200 bg-yellow-50 focus:ring-yellow-400'
+                                    }`}
+                                  />
+                                </div>
+                              )}
 
                               {/* ── Edit card form ── */}
                               {isEditingCard ? (
@@ -3329,6 +3471,9 @@ export default function SalesRevenue() {
           </div>
         );
       })()}
+
+      {/* ── Sales AI Chatbot ── */}
+      <SalesChat />
     </div>
   );
 }
@@ -3343,6 +3488,7 @@ function KpiCard({
   formatVal = (n) => fmtDec(n),
   sub,
   subLy,
+  onClick,
 }: {
   label: string;
   current: number;
@@ -3350,13 +3496,21 @@ function KpiCard({
   formatVal?: (n: number) => string;
   sub?: string;
   subLy?: string;
+  onClick?: () => void;
 }) {
   const pctChange = ly != null && ly !== 0 ? ((current - ly) / ly) * 100 : null;
   const up = pctChange != null && pctChange >= 0;
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-2">
-      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+    <div
+      className={`bg-white rounded-xl border border-slate-200 p-5 flex flex-col gap-2 ${onClick ? 'cursor-pointer hover:border-blue-300 hover:shadow-sm transition-all' : ''}`}
+      onClick={onClick}
+      title={onClick ? 'Click for details' : undefined}
+    >
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide flex items-center gap-1">
+        {label}
+        {onClick && <span className="text-[9px] text-blue-400 font-normal normal-case">▸ details</span>}
+      </p>
       <p className="text-2xl font-bold text-slate-900 leading-none">{formatVal(current)}</p>
       {ly != null && (
         <p className="text-xs text-slate-400">vs. <span className="text-slate-500 font-medium">{formatVal(ly)}</span></p>
@@ -3384,11 +3538,9 @@ function KpiGrid({
   filterEnd: string;
 }) {
   const ly = data.lastYear;
+  const [drilldown, setDrilldown] = useState<'avg_ticket' | 'tickets' | 'units' | null>(null);
 
   // ── Net sales from reporting dailyRows for the selected range ────
-  // reportingQ.dailyRows covers the last 30 days. When the filter falls
-  // within that window we can compute accurate net (post-discount/return)
-  // figures. Outside that window we fall back to gross rollup amounts.
   const netForRange = useMemo(() => {
     if (!reportingData?.dailyRows || reportingData.dailyRows.length === 0) return null;
     const rows = reportingData.dailyRows.filter((r) => {
@@ -3399,15 +3551,16 @@ function KpiGrid({
     return {
       netSales: rows.reduce((s, r) => s + ((r['source_sales.net_sales'] as number) ?? 0), 0),
       transactions: rows.reduce((s, r) => s + ((r['source_sales.transaction_count'] as number) ?? 0), 0),
+      rows,
     };
   }, [reportingData, filterStart, filterEnd]);
 
-  // Primary amounts — prefer net from reporting, fall back to gross rollup
+  // Primary amounts
   const primaryGross = data.selectedRange ?? data.today;
   const primaryAmount = netForRange?.netSales ?? primaryGross.totalAmount;
   const primaryTickets = netForRange?.transactions ?? primaryGross.ticketCount;
 
-  // LY — gross rollup only (no LY net data available)
+  // LY
   const lyPrimary = ly?.selectedRange ?? ly?.today;
   const lyAmount  = lyPrimary?.totalAmount ?? 0;
   const lyTickets = lyPrimary?.ticketCount ?? 0;
@@ -3417,7 +3570,7 @@ function KpiGrid({
 
   const estUnits      = primaryTickets * 1.5;
   const lyEstUnits    = lyTickets * 1.5;
-  const unitsPerTxn   = 1.5; // constant — units/ticket is always 1.5 estimate
+  const unitsPerTxn   = 1.5;
   const lyUnitsPerTxn = 1.5;
 
   // YTD net from reporting summary
@@ -3426,24 +3579,138 @@ function KpiGrid({
   const lyYtdAmount   = ly?.yearToDate.totalAmount ?? 0;
   const lyYtdTickets  = ly?.yearToDate.ticketCount ?? 0;
 
+  // Net Returns from reporting returnRows
+  const netReturns = useMemo(() => {
+    if (!reportingData?.returnRows) return null;
+    const rows = reportingData.returnRows.filter(() => {
+      // Filter to selected range if possible — returnRows are YTD so we can't
+      // filter by date, but we can show the total and note it's YTD
+      return true;
+    });
+    const total = rows.reduce((s, r) => s + Math.abs((r['source_sales.gross_returns'] as number) ?? 0), 0);
+    return { total: Math.round(total * 100) / 100, byBrand: rows };
+  }, [reportingData]);
+
   const rangeLabel = filterStart && filterEnd
     ? `${new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date(filterEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
     : 'Selected Period';
-
   const netLabel = netForRange ? rangeLabel : `${rangeLabel} (gross)`;
 
+  // Daily rows for the selected range (for drill-down)
+  const rangeRows = netForRange?.rows ?? [];
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <KpiCard label="Sales vs. Last Year"     current={primaryAmount}  ly={lyAmount > 0 ? lyAmount : undefined}     formatVal={fmtDec} sub={netLabel} />
-      <KpiCard label="Avg Transaction Value"   current={avgTicket}      ly={lyAvgTicket > 0 ? lyAvgTicket : undefined} formatVal={fmtDec} />
-      <KpiCard label="# of Tickets"            current={primaryTickets} ly={lyTickets > 0 ? lyTickets : undefined}    formatVal={(n) => n.toFixed(0)} />
-      <KpiCard label="Total Units Sold"        current={estUnits}       ly={lyEstUnits > 0 ? lyEstUnits : undefined}  formatVal={(n) => n.toFixed(0)} sub="est. (1.5× tickets)" />
-      <KpiCard label="Units / Transaction"     current={unitsPerTxn}    ly={lyUnitsPerTxn}                            formatVal={(n) => n.toFixed(2)} />
-      <KpiCard label="Net Returns"             current={0}              ly={undefined}                                formatVal={() => '$0'} sub="not tracked in rollup" />
-      <KpiCard label="Year to Date (Net)"      current={ytdNet}         ly={lyYtdAmount > 0 ? lyYtdAmount : undefined} formatVal={fmt}
-        sub={`${ytdTickets.toLocaleString()} tickets`}
-        subLy={ly ? `${lyYtdTickets.toLocaleString()} tickets` : undefined} />
-    </div>
+    <>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiCard label="Sales vs. Last Year"     current={primaryAmount}  ly={lyAmount > 0 ? lyAmount : undefined}     formatVal={fmtDec} sub={netLabel} />
+        <KpiCard label="Avg Transaction Value"   current={avgTicket}      ly={lyAvgTicket > 0 ? lyAvgTicket : undefined} formatVal={fmtDec}
+          onClick={rangeRows.length > 0 ? () => setDrilldown('avg_ticket') : undefined} />
+        <KpiCard label="# of Tickets"            current={primaryTickets} ly={lyTickets > 0 ? lyTickets : undefined}    formatVal={(n) => n.toFixed(0)}
+          onClick={rangeRows.length > 0 ? () => setDrilldown('tickets') : undefined} />
+        <KpiCard label="Total Units Sold"        current={estUnits}       ly={lyEstUnits > 0 ? lyEstUnits : undefined}  formatVal={(n) => n.toFixed(0)} sub="est. (1.5× tickets)"
+          onClick={rangeRows.length > 0 ? () => setDrilldown('units') : undefined} />
+        <KpiCard label="Units / Transaction"     current={unitsPerTxn}    ly={lyUnitsPerTxn}                            formatVal={(n) => n.toFixed(2)} />
+        <KpiCard label="Net Returns (YTD)"
+          current={netReturns?.total ?? 0}
+          ly={undefined}
+          formatVal={fmtDec}
+          sub={netReturns == null ? 'not yet synced' : netReturns.total === 0 ? 'no returns this year' : undefined} />
+        <KpiCard label="Year to Date (Net)"      current={ytdNet}         ly={lyYtdAmount > 0 ? lyYtdAmount : undefined} formatVal={fmt}
+          sub={`${ytdTickets.toLocaleString()} tickets`}
+          subLy={ly ? `${lyYtdTickets.toLocaleString()} tickets` : undefined} />
+      </div>
+
+      {/* ── Drill-down modal ── */}
+      {drilldown && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setDrilldown(null); }}
+        >
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+            {/* Header */}
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">
+                  {drilldown === 'avg_ticket' && 'Avg Transaction Value — Daily Breakdown'}
+                  {drilldown === 'tickets' && '# of Tickets — Daily Breakdown'}
+                  {drilldown === 'units' && 'Total Units Sold — Daily Breakdown'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">{rangeLabel} · from Heartland Reporting Analyzer</p>
+              </div>
+              <button onClick={() => setDrilldown(null)} className="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto">
+              {rangeRows.length === 0 ? (
+                <p className="p-6 text-sm text-slate-400 text-center">No data for this date range in the reporting cache.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-50 border-b border-slate-100">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 text-slate-500 font-medium">Date</th>
+                      <th className="text-right px-4 py-2.5 text-slate-500 font-medium">Net Sales</th>
+                      <th className="text-right px-4 py-2.5 text-slate-500 font-medium">Tickets</th>
+                      {drilldown === 'avg_ticket' && <th className="text-right px-4 py-2.5 text-slate-500 font-medium">Avg Ticket</th>}
+                      {drilldown === 'units' && <th className="text-right px-4 py-2.5 text-slate-500 font-medium">Est. Units</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {[...rangeRows]
+                      .sort((a, b) => String(b['date.date'] ?? '').localeCompare(String(a['date.date'] ?? '')))
+                      .map((r, i) => {
+                        const date = String(r['date.date'] ?? '');
+                        const sales = (r['source_sales.net_sales'] as number) ?? 0;
+                        const txns = (r['source_sales.transaction_count'] as number) ?? 0;
+                        const avg = txns > 0 ? sales / txns : 0;
+                        const units = Math.round(txns * 1.5);
+                        return (
+                          <tr key={i} className="hover:bg-slate-50">
+                            <td className="px-4 py-2 text-slate-700 font-medium">
+                              {date ? new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '—'}
+                            </td>
+                            <td className="px-4 py-2 text-right font-mono text-slate-700">{fmtDec(sales)}</td>
+                            <td className="px-4 py-2 text-right text-slate-600">{txns}</td>
+                            {drilldown === 'avg_ticket' && (
+                              <td className="px-4 py-2 text-right font-mono font-semibold text-blue-700">{fmtDec(avg)}</td>
+                            )}
+                            {drilldown === 'units' && (
+                              <td className="px-4 py-2 text-right font-semibold text-blue-700">{units}</td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                  {/* Totals row */}
+                  <tfoot className="border-t-2 border-slate-200 bg-slate-50">
+                    <tr>
+                      <td className="px-4 py-2.5 text-xs font-semibold text-slate-700">Total</td>
+                      <td className="px-4 py-2.5 text-right font-mono font-semibold text-slate-900">{fmtDec(primaryAmount)}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold text-slate-900">{primaryTickets}</td>
+                      {drilldown === 'avg_ticket' && (
+                        <td className="px-4 py-2.5 text-right font-mono font-semibold text-blue-700">{fmtDec(avgTicket)}</td>
+                      )}
+                      {drilldown === 'units' && (
+                        <td className="px-4 py-2.5 text-right font-semibold text-blue-700">{Math.round(estUnits)}</td>
+                      )}
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-100 flex justify-between items-center">
+              <p className="text-[10px] text-slate-400">
+                {drilldown === 'units' ? 'Units estimated at 1.5× ticket count — exact unit data requires line-item sync.' : 'Net sales from Heartland Reporting Analyzer (post-discount, post-return).'}
+              </p>
+              <button onClick={() => setDrilldown(null)} className="px-3 py-1.5 text-xs rounded border border-slate-200 text-slate-600 hover:bg-slate-50">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -3528,11 +3795,18 @@ interface NoteItemProps {
   onReassign: (id: string, assignee: string | undefined) => void;
 }
 function NoteItem({ n, columns, onToggle, onRemove, onReassign }: NoteItemProps) {
+  const dateStamp = new Date(n.createdAt).toLocaleDateString('en-US', {
+    timeZone: 'America/Chicago',
+    month: 'short', day: 'numeric', year: 'numeric',
+  });
   return (
     <li className={`flex items-start gap-2 bg-white rounded-lg px-2.5 py-2 border shadow-sm ${n.done ? 'opacity-50 border-slate-100' : 'border-amber-200'}`}>
       <input type="checkbox" checked={n.done} onChange={() => onToggle(n.id)}
         className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer" aria-label={n.done ? 'Unmark done' : 'Mark done'} />
-      <span className={`flex-1 text-xs leading-snug ${n.done ? 'line-through text-slate-400' : 'text-slate-700'}`}>{n.text}</span>
+      <div className="flex-1 min-w-0">
+        <span className={`text-xs leading-snug ${n.done ? 'line-through text-slate-400' : 'text-slate-700'}`}>{n.text}</span>
+        <p className="text-[9px] text-slate-400 mt-0.5">{dateStamp}</p>
+      </div>
       <div className="flex items-center gap-1 flex-shrink-0">
         <select
           value={n.assignee ?? ''}
@@ -3562,17 +3836,17 @@ interface ColumnInputProps {
 }
 function ColumnInput({ value, onChange, onAdd }: ColumnInputProps) {
   return (
-    <div className="flex gap-1.5 mt-2">
+    <div className="flex gap-1.5 mt-2 min-w-0">
       <input
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(); } }}
         placeholder="Add item… (Enter)"
-        className="flex-1 text-[11px] rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
+        className="flex-1 min-w-0 text-[11px] rounded-lg border border-amber-200 bg-white px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-amber-400 placeholder-slate-400"
       />
       <button onClick={onAdd} disabled={!value.trim()}
-        className="px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-amber-400 text-white hover:bg-amber-500 disabled:opacity-40 transition">
+        className="flex-shrink-0 px-2.5 py-1.5 text-[11px] font-medium rounded-lg bg-amber-400 text-white hover:bg-amber-500 disabled:opacity-40 transition">
         Add
       </button>
     </div>
@@ -3671,12 +3945,12 @@ function NotesPanel() {
       </div>
 
       {/* Columns */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(180px, 1fr))` }}>
         {columns.map((col) => {
           const colNotes = notes.filter((n) => n.assignee === col.id);
           const colActive = colNotes.filter((n) => !n.done).length;
           return (
-            <div key={col.id} className="bg-white/60 rounded-lg border border-amber-200 p-2.5 flex flex-col gap-1.5">
+            <div key={col.id} className="bg-white/60 rounded-lg border border-amber-200 p-2.5 flex flex-col gap-1.5 min-w-0 overflow-hidden">
               {/* Column header */}
               <div className="flex items-center gap-1 mb-1">
                 {editingCol === col.id ? (

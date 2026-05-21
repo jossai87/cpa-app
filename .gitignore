@@ -47,5 +47,11 @@ Thumbs.db
 foot-solutions-buildout-plan.md
 documents/
 
+# ── OAuth / Google credentials ────────────────────────────────────────
+credentials/
+client_secret*.json
+token*.json
+*.oauth.json
+
 # ── Vite ─────────────────────────────────────────────────────────────
 vite.config.js.timestamp-*

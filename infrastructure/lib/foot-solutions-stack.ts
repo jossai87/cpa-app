@@ -12,7 +12,16 @@ import * as apigwv2integrations from 'aws-cdk-lib/aws-apigatewayv2-integrations'
 import * as apigwv2authorizers from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as route53 from 'aws-cdk-lib/aws-route53';
+import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
 import { Construct } from 'constructs';
+
+// Custom domain config — manually-provisioned ACM cert in us-east-1
+const CUSTOM_DOMAIN = 'fsmanagementsystem.com';
+const CUSTOM_DOMAIN_ALT = `www.${CUSTOM_DOMAIN}`;
+const HOSTED_ZONE_ID = 'Z0341623D3YSWQ21OYVP';
+const ACM_CERT_ARN = 'arn:aws:acm:us-east-1:558985210319:certificate/619356b6-ac75-494b-8f9a-6ba46e2386be';
 
 export class FootSolutionsStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
@@ -150,10 +159,38 @@ export class FootSolutionsStack extends Stack {
         },
       ],
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      domainNames: [CUSTOM_DOMAIN, CUSTOM_DOMAIN_ALT],
+      certificate: acm.Certificate.fromCertificateArn(this, 'CustomDomainCert', ACM_CERT_ARN),
     });
     Tags.of(distribution).add('Component', 'frontend');
 
-    const cloudfrontDomain = `https://${distribution.distributionDomainName}`;
+    // ── 3b. Route 53 alias records → CloudFront ──────────────────────
+    const hostedZone = route53.HostedZone.fromHostedZoneAttributes(this, 'HostedZone', {
+      hostedZoneId: HOSTED_ZONE_ID,
+      zoneName: CUSTOM_DOMAIN,
+    });
+    new route53.ARecord(this, 'AliasApex', {
+      zone: hostedZone,
+      recordName: CUSTOM_DOMAIN,
+      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+    });
+    new route53.AaaaRecord(this, 'AliasApexAAAA', {
+      zone: hostedZone,
+      recordName: CUSTOM_DOMAIN,
+      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+    });
+    new route53.ARecord(this, 'AliasWww', {
+      zone: hostedZone,
+      recordName: CUSTOM_DOMAIN_ALT,
+      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+    });
+    new route53.AaaaRecord(this, 'AliasWwwAAAA', {
+      zone: hostedZone,
+      recordName: CUSTOM_DOMAIN_ALT,
+      target: route53.RecordTarget.fromAlias(new route53Targets.CloudFrontTarget(distribution)),
+    });
+
+    const cloudfrontDomain = `https://${CUSTOM_DOMAIN}`;
 
     // ── 4. Cognito User Pool Client (now that CloudFront domain is known) ──
     const userPoolClient = userPool.addClient('WebClient', {
@@ -162,8 +199,16 @@ export class FootSolutionsStack extends Stack {
       oAuth: {
         flows: { authorizationCodeGrant: true },
         scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
-        callbackUrls: [cloudfrontDomain + '/'],
-        logoutUrls: [cloudfrontDomain + '/'],
+        callbackUrls: [
+          `https://${CUSTOM_DOMAIN}/callback`,
+          `https://${CUSTOM_DOMAIN_ALT}/callback`,
+        ],
+        logoutUrls: [
+          `https://${CUSTOM_DOMAIN}/`,
+          `https://${CUSTOM_DOMAIN}/login`,
+          `https://${CUSTOM_DOMAIN_ALT}/`,
+          `https://${CUSTOM_DOMAIN_ALT}/login`,
+        ],
       },
       authFlows: {
         userSrp: true,
@@ -179,6 +224,10 @@ export class FootSolutionsStack extends Stack {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy: RemovalPolicy.RETAIN,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      // Optional `ttl` attribute on items — DynamoDB auto-deletes them
+      // within 48h of expiry. Used by the Gmail cache for the rolling
+      // 365-day window. Items without `ttl` are unaffected.
+      timeToLiveAttribute: 'ttl',
     });
     Tags.of(table).add('Component', 'data');
 
@@ -459,7 +508,10 @@ export class FootSolutionsStack extends Stack {
       apiName: 'foot-solutions-api',
       description: 'Foot Solutions Management Platform HTTP API',
       corsPreflight: {
-        allowOrigins: [cloudfrontDomain],
+        allowOrigins: [
+          `https://${CUSTOM_DOMAIN}`,
+          `https://${CUSTOM_DOMAIN_ALT}`,
+        ],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
@@ -671,6 +723,12 @@ export class FootSolutionsStack extends Stack {
       authorizer: jwtAuthorizer,
     });
     httpApi.addRoutes({
+      path: '/pos/vendor-health',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
       path: '/pos/reporting',
       methods: [apigwv2.HttpMethod.GET],
       integration: heartlandIntegration,
@@ -691,6 +749,359 @@ export class FootSolutionsStack extends Stack {
     httpApi.addRoutes({
       path: '/pos/vendor-settings',
       methods: [apigwv2.HttpMethod.PUT],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/admin/settings',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/admin/settings',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // ── 10b. Chat Lambda (Sales & Revenue AI assistant) ───────────────
+    const chatFn = new nodejs.NodejsFunction(this, 'ChatHandler', {
+      functionName: 'foot-solutions-chat-handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/chat/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      timeout: Duration.seconds(60),
+      memorySize: 256,
+      environment: {
+        TABLE_NAME: table.tableName,
+        OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
+        BEDROCK_MODEL_ID: 'us.amazon.nova-pro-v1:0',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Sales & Revenue AI chatbot — Bedrock tool use with DynamoDB data access',
+    });
+    Tags.of(chatFn).add('Component', 'ai-chat');
+
+    // Grant DynamoDB read for context fetching
+    table.grantReadData(chatFn);
+
+    // Grant Bedrock InvokeModel for Nova 2 Lite
+    chatFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ChatBedrockInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          // Nova Pro (primary)
+          'arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0',
+          // Nova 2 Lite (fallback)
+          'arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-2-lite-v1:0',
+          'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0',
+          'arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0',
+          'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0',
+        ],
+      })
+    );
+
+    const chatIntegration = new apigwv2integrations.HttpLambdaIntegration(
+      'ChatIntegration',
+      chatFn
+    );
+
+    httpApi.addRoutes({
+      path: '/pos/chat',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: chatIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // The Sales chatbot can also read Gmail (for vendor / inbox context).
+    // Same secret prefix the daily-report Lambda uses.
+    chatFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ChatGmailSecrets',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+        ],
+      })
+    );
+
+    // ── 10b1. Gmail Analysis Lambda (analyze + chat over inbox) ──────
+    const gmailAnalysisFn = new nodejs.NodejsFunction(this, 'GmailAnalysisHandler', {
+      functionName: 'foot-solutions-gmail-analysis',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/gmail-analysis/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      timeout: Duration.minutes(2),
+      memorySize: 512,
+      environment: {
+        TABLE_NAME: table.tableName,
+        OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
+        // Claude Sonnet 4.6 (1M context, native tool use, prompt caching).
+        // Override with BEDROCK_MODEL_ID env to swap models without redeploying.
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Gmail Analysis: structured digest + agentic chat grounded in the owner\'s inbox',
+    });
+    Tags.of(gmailAnalysisFn).add('Component', 'ai-gmail-analysis');
+
+    // DynamoDB read+write for the cached analysis item (sk=GMAIL#ANALYSIS#LATEST)
+    // and the per-message Gmail cache (sk=GMAIL#MSG/THREAD/VENDOR/KIND…).
+    table.grantReadWriteData(gmailAnalysisFn);
+
+    // Bedrock InvokeModel — Claude Sonnet 4.6 (primary) + 4.5 + Nova Pro fallbacks
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisBedrockInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [
+          // Claude Sonnet 4.6 (primary)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
+          // Claude Sonnet 4.5 (fallback)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
+          // Nova Pro (fallback)
+          'arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0',
+          'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0',
+        ],
+      })
+    );
+
+    // Secrets Manager read on Gmail OAuth client + refresh token
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisGmailSecrets',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+        ],
+      })
+    );
+
+    const gmailAnalysisIntegration = new apigwv2integrations.HttpLambdaIntegration(
+      'GmailAnalysisIntegration',
+      gmailAnalysisFn
+    );
+
+    httpApi.addRoutes({
+      path: '/gmail/analyze',
+      methods: [apigwv2.HttpMethod.POST, apigwv2.HttpMethod.GET],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/gmail/chat',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/gmail/cache-stats',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // ── 10b2. Gmail Sync Lambda (backfill + daily incremental) ───────
+    const gmailSyncFn = new nodejs.NodejsFunction(this, 'GmailSyncHandler', {
+      functionName: 'foot-solutions-gmail-sync',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/gmail-sync/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      // Backfill of 6 months of mail can take several minutes — Gmail API
+      // is the bottleneck (1 request per message body fetch).
+      timeout: Duration.minutes(15),
+      memorySize: 1024,
+      environment: {
+        TABLE_NAME: table.tableName,
+        OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Gmail incremental + backfill sync into DynamoDB cache (TTL 365 days)',
+    });
+    Tags.of(gmailSyncFn).add('Component', 'gmail-sync');
+
+    // Read+write for cache items + sync state
+    table.grantReadWriteData(gmailSyncFn);
+
+    // Read Gmail OAuth secrets
+    gmailSyncFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailSyncGmailSecrets',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+        ],
+      })
+    );
+
+    // EventBridge cron — daily at 06:00 UTC ≈ 1am Central (incremental sync)
+    new events.Rule(this, 'GmailSyncDailySchedule', {
+      schedule: events.Schedule.cron({ minute: '0', hour: '6', day: '*', month: '*', year: '*' }),
+      targets: [
+        new targets.LambdaFunction(gmailSyncFn, {
+          event: events.RuleTargetInput.fromObject({ mode: 'incremental' }),
+        }),
+      ],
+      description: 'Daily incremental Gmail sync (~1am Central)',
+    });
+
+    // On-demand: POST /gmail/sync routes through the same Lambda
+    const gmailSyncIntegration = new apigwv2integrations.HttpLambdaIntegration(
+      'GmailSyncIntegration',
+      gmailSyncFn
+    );
+    httpApi.addRoutes({
+      path: '/gmail/sync',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: gmailSyncIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // ── 10c. Daily Report Lambda (sends nightly briefing email) ──────
+    const dailyReportFn = new nodejs.NodejsFunction(this, 'DailyReportHandler', {
+      functionName: 'foot-solutions-daily-report',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/daily-report/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      timeout: Duration.minutes(2),
+      memorySize: 512,
+      environment: {
+        TABLE_NAME: table.tableName,
+        OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
+        // Default to Claude Sonnet 4.5 (no extra access required).
+        // Switch to 'us.anthropic.claude-opus-4-7' after enabling marketplace
+        // access at console.aws.amazon.com/bedrock → Model access.
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+        FROM_ADDRESS: 'noreply@fsmanagementsystem.com',
+        TO_ADDRESS: 'flowermound@footsolutions.com',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Daily sales briefing email — Bedrock Claude + SES',
+    });
+    Tags.of(dailyReportFn).add('Component', 'ai-daily-report');
+
+    // Grant DynamoDB read+write (read sales data, write email history)
+    table.grantReadWriteData(dailyReportFn);
+
+    // Grant Bedrock InvokeModel for Claude family — covers Sonnet 4.5 and
+    // Opus 4.7 so you can switch model IDs without redeploying.
+    dailyReportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DailyReportBedrockInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [
+          // Inference profiles (region-bound + global)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0',
+          // Foundation model ARNs the profiles fan out to
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0',
+        ],
+      })
+    );
+
+    // Grant SES SendEmail from the verified domain
+    dailyReportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DailyReportSesSend',
+        effect: iam.Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          `arn:aws:ses:us-east-1:${this.account}:identity/fsmanagementsystem.com`,
+        ],
+      })
+    );
+
+    // Grant Secrets Manager read for Gmail OAuth credentials + refresh token.
+    // The secrets are created manually (one-time bootstrap) and named:
+    //   foot-solutions/gmail/oauth-client    — { client_id, client_secret }
+    //   foot-solutions/gmail/refresh-token   — { refresh_token, email }
+    dailyReportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DailyReportGmailSecrets',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue'],
+        resources: [
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+        ],
+      })
+    );
+
+    // Schedule: every day at ~22:00 America/Chicago (10 PM Central).
+    // EventBridge cron is UTC. 03:00 UTC ≈ 10 PM CST / 9 PM CDT (close enough year-round).
+    new events.Rule(this, 'DailyReportSchedule', {
+      schedule: events.Schedule.cron({
+        minute: '0',
+        hour: '3',
+        day: '*',
+        month: '*',
+        year: '*',
+      }),
+      targets: [new targets.LambdaFunction(dailyReportFn)],
+      description: 'Trigger daily sales briefing email at ~10 PM Central',
+    });
+
+    // Allow heartland handler to invoke the daily-report Lambda for test-email route
+    dailyReportFn.grantInvoke(heartlandFn);
+    heartlandFn.addEnvironment('DAILY_REPORT_FUNCTION_NAME', dailyReportFn.functionName);
+
+    // ── 10d. New API routes for admin email feed + test send ─────────
+    httpApi.addRoutes({
+      path: '/admin/emails',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/admin/test-email',
+      methods: [apigwv2.HttpMethod.POST],
       integration: heartlandIntegration,
       authorizer: jwtAuthorizer,
     });

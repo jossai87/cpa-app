@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, Plus, X } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
+import { useAdmin } from '../lib/admin';
 import CredentialRow from '../components/CredentialRow';
 import Spinner from '../components/Spinner';
 import type { Credential } from '../types';
@@ -32,8 +33,15 @@ function sortCredentials(creds: Credential[]): Credential[] {
 
 export default function Credentials() {
   const queryClient = useQueryClient();
+  const { isVisible } = useAdmin();
   const { data: rawCredentials, isLoading, isError, error } = useCredentials();
-  const credentials = rawCredentials ? sortCredentials(rawCredentials) : rawCredentials;
+  const credentials = rawCredentials
+    ? sortCredentials(rawCredentials).filter((c) => {
+        // Hide the corporate gmail entry from non-admins (unless admin override turns it on)
+        if (c.id === 'gmail-corporate' && !isVisible('credentials.gmail-corporate')) return false;
+        return true;
+      })
+    : rawCredentials;
 
   // New credential form
   const [showNew, setShowNew] = useState(false);

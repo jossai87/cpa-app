@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import CpaTaxAssistant from './pages/CpaTaxAssistant';
 import Credentials from './pages/Credentials';
 import SalesRevenue from './pages/SalesRevenue';
+import GmailAnalysis from './pages/GmailAnalysis';
 import Spinner from './components/Spinner';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -65,6 +66,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <SalesRevenue />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/gmail"
+            element={
+              <ProtectedRoute>
+                <GmailAnalysis />
               </ProtectedRoute>
             }
           />
