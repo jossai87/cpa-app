@@ -266,7 +266,8 @@ async function handleDashboard(
     docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#ORDERS' } })),
     docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#INVENTORY#CATALOG' } })),
   ]);
-  const openOrderCount = (purchasingResult.Item?.['orders'] as unknown[] | undefined)?.length ?? 0;
+  const openOrderCount = (purchasingResult.Item?.['vendorRank'] as Array<{ openOrders?: number }> | undefined)
+    ?.reduce((s, r) => s + (r.openOrders ?? 0), 0) ?? 0;
   const lowStockCount = ((inventoryResult.Item?.['data'] as Record<string, unknown> | undefined)?.['lowStockItems'] as unknown[] | undefined)?.length ?? 0;
 
   const status = await getSyncStatus();
@@ -830,13 +831,17 @@ async function handlePurchasing(): Promise<APIGatewayProxyResultV2> {
   const orders = (ordersResult.Item?.['orders'] as unknown[]) ?? [];
   const totalOrders = (ordersResult.Item?.['totalOrders'] as number) ?? 0;
 
+  // Sum openOrders from vendorRank — this is the authoritative count computed
+  // from the full order history, so it matches what each vendor card shows.
+  const openOrderCount = vendorRank.reduce((s, r) => s + (r.openOrders ?? 0), 0);
+
   return json(200, {
     vendors,
     vendorCount: vendors.length,
     vendorRank,
     orders,
     totalOrders,
-    openOrderCount: orders.length,
+    openOrderCount,
     cachedAt: ordersResult.Item?.['cachedAt'] ?? vendorsResult.Item?.['cachedAt'] ?? null,
   });
 }

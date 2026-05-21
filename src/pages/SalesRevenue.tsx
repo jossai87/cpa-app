@@ -242,7 +242,7 @@ const VENDOR_CONTACTS: Record<string, { phone?: string; email?: string; website?
   'EARTH BRAND SHOES': { website: 'https://www.earthbrands.com' },
   'DOCTOR SPECIFIED': { website: 'https://www.doctorspecified.com' },
   'KUMFS/ZIERA':      { website: 'https://www.zierausa.com' },
-  'YALEET':           { phone: '516-465-6268', website: 'https://www.naot.com' },
+  'YALEET':           { phone: '516-465-6268', website: 'https://www.naot.com', rep: { name: 'Joey DeWitt — Sales Rep', phone: '817-975-3365' } },
   'AMERIBAG':         { phone: '1-800-AMERIBAG', website: 'https://www.ameribag.com' },
   'ANA-TECH':         { website: 'https://www.ana-tech.com' },
   'BERKEMANNUSA C/O GARRY WILLIS': { website: 'https://www.berkemann.com' },
@@ -265,6 +265,17 @@ const VENDOR_CONTACTS: Record<string, { phone?: string; email?: string; website?
   'PEDORS':           { phone: '1-800-750-6729', website: 'https://www.pedors.com' },
   'PEDIFIX':          { phone: '1-800-424-5561', website: 'https://www.pedifix.com' },
 };
+
+// Vendor display name overrides — append known trade names in parentheses
+const VENDOR_DISPLAY_OVERRIDES: Record<string, string> = {
+  'YALEET': 'Yaleet (NAOT)',
+};
+
+function displayVendorName(raw: string | undefined | null, fallback: string): string {
+  if (!raw) return fallback;
+  const override = VENDOR_DISPLAY_OVERRIDES[raw.toUpperCase()];
+  return override ?? raw;
+}
 
 function relativeTime(iso: string | null | undefined): string {
   if (!iso) return 'never';
@@ -883,6 +894,102 @@ export default function SalesRevenue() {
         return next;
       });
     }
+  }
+
+  // ── Vendor card overrides (persisted in localStorage) ───────────
+  // Allows editing display name, phone, email, website, rep fields per vendor.
+  const VENDOR_OVERRIDES_KEY = 'foot-solutions:vendor-overrides';
+  interface VendorOverride {
+    displayName?: string;
+    phone?: string;
+    email?: string;
+    website?: string;
+    repName?: string;
+    repPhone?: string;
+    repEmail?: string;
+    repTitle?: string;
+  }
+  const [vendorOverrides, setVendorOverrides] = useState<Record<number, VendorOverride>>(() => {
+    try { return JSON.parse(window.localStorage.getItem(VENDOR_OVERRIDES_KEY) ?? '{}') as Record<number, VendorOverride>; }
+    catch { return {}; }
+  });
+  const [editingVendorCard, setEditingVendorCard] = useState<number | null>(null);
+  const [vendorCardDraft, setVendorCardDraft] = useState<VendorOverride>({});
+
+  function persistVendorOverrides(next: Record<number, VendorOverride>) {
+    setVendorOverrides(next);
+    try { window.localStorage.setItem(VENDOR_OVERRIDES_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+  function saveVendorCard(vendorId: number) {
+    persistVendorOverrides({ ...vendorOverrides, [vendorId]: vendorCardDraft });
+    setEditingVendorCard(null);
+  }
+  function resetVendorCard(vendorId: number) {
+    const next = { ...vendorOverrides };
+    delete next[vendorId];
+    persistVendorOverrides(next);
+    setEditingVendorCard(null);
+  }
+  const CUSTOM_CONTACTS_KEY = 'foot-solutions:vendor-custom-contacts';
+  interface VendorContact {
+    id: string;
+    name?: string;
+    title?: string;
+    phone?: string;
+    email?: string;
+  }
+  const [customContacts, setCustomContacts] = useState<Record<number, VendorContact[]>>(() => {
+    try {
+      return JSON.parse(window.localStorage.getItem(CUSTOM_CONTACTS_KEY) ?? '{}') as Record<number, VendorContact[]>;
+    } catch { return {}; }
+  });
+  // Which vendor's "add" form is open
+  const [editingContactsFor, setEditingContactsFor] = useState<number | null>(null);
+  // Draft for new contact
+  const [contactDraft, setContactDraft] = useState<Omit<VendorContact, 'id'>>({ name: '', title: '', phone: '', email: '' });
+  // Which contact is being edited inline: { vendorId, contactId }
+  const [inlineEdit, setInlineEdit] = useState<{ vendorId: number; contactId: string } | null>(null);
+  const [inlineEditDraft, setInlineEditDraft] = useState<Omit<VendorContact, 'id'>>({ name: '', title: '', phone: '', email: '' });
+
+  function persistCustomContacts(next: Record<number, VendorContact[]>) {
+    setCustomContacts(next);
+    try { window.localStorage.setItem(CUSTOM_CONTACTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  }
+
+  function addCustomContact(vendorId: number) {
+    const { name, title, phone, email } = contactDraft;
+    // At least one field must be filled
+    if (!name?.trim() && !phone?.trim() && !email?.trim() && !title?.trim()) return;
+    const contact: VendorContact = {
+      id: crypto.randomUUID(),
+      name: name?.trim() || undefined,
+      title: title?.trim() || undefined,
+      phone: phone?.trim() || undefined,
+      email: email?.trim() || undefined,
+    };
+    const existing = customContacts[vendorId] ?? [];
+    persistCustomContacts({ ...customContacts, [vendorId]: [...existing, contact] });
+    setContactDraft({ name: '', title: '', phone: '', email: '' });
+    setEditingContactsFor(null);
+  }
+
+  function saveInlineEdit(vendorId: number, contactId: string) {
+    const { name, title, phone, email } = inlineEditDraft;
+    const updated: VendorContact = {
+      id: contactId,
+      name: name?.trim() || undefined,
+      title: title?.trim() || undefined,
+      phone: phone?.trim() || undefined,
+      email: email?.trim() || undefined,
+    };
+    const existing = customContacts[vendorId] ?? [];
+    persistCustomContacts({ ...customContacts, [vendorId]: existing.map((c) => c.id === contactId ? updated : c) });
+    setInlineEdit(null);
+  }
+
+  function removeCustomContact(vendorId: number, contactId: string) {
+    const existing = customContacts[vendorId] ?? [];
+    persistCustomContacts({ ...customContacts, [vendorId]: existing.filter((c) => c.id !== contactId) });
   }
 
   const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
@@ -2246,6 +2353,7 @@ export default function SalesRevenue() {
 
                         return sorted.map((v) => {
                           const info = VENDOR_CONTACTS[v.name?.toUpperCase() ?? ''] ?? VENDOR_CONTACTS[v.name ?? ''];
+                          const ov = vendorOverrides[v.id] ?? {};
                           const key = `vendor-account:${v.id}`;
                           const hasAccount = activeAccounts.has(key);
                           const isDiscontinued = discontinuedVendors.has(key);
@@ -2253,34 +2361,67 @@ export default function SalesRevenue() {
                           const rankRow = (d.vendorRank ?? []).find((r) => r.vendorId === v.id);
                           const openOrders = rankRow?.openOrders ?? 0;
                           const totalOrders = rankRow?.totalOrders ?? 0;
+                          const isEditingCard = editingVendorCard === v.id;
+
+                          // Merge: override wins over VENDOR_CONTACTS, which wins over nothing
+                          const displayName = ov.displayName ?? displayVendorName(v.name, `Vendor ${v.id}`);
+                          const phone   = ov.phone   ?? info?.phone;
+                          const email   = ov.email   ?? info?.email;
+                          const website = ov.website ?? info?.website;
+                          const repName  = ov.repName  ?? info?.rep?.name;
+                          const repPhone = ov.repPhone ?? info?.rep?.phone;
+                          const repEmail = ov.repEmail ?? info?.rep?.email;
+                          const repTitle = ov.repTitle ?? (info?.rep?.name ? '' : undefined);
+                          const hasRep = repName || repPhone || repEmail;
+
+                          const inputCls = "w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white";
+
                           return (
                             <div
                               key={v.id}
                               className={`rounded-lg border p-3 transition ${
-                                isDiscontinued
-                                  ? 'border-amber-300 bg-amber-50'
-                                  : hasAccount
-                                    ? 'border-emerald-300 bg-emerald-50'
-                                    : 'border-slate-100 bg-slate-50 hover:border-slate-300'
+                                isDiscontinued ? 'border-amber-300 bg-amber-50'
+                                  : hasAccount ? 'border-emerald-300 bg-emerald-50'
+                                  : 'border-slate-100 bg-slate-50 hover:border-slate-300'
                               }`}
                             >
+                              {/* ── Header row ── */}
                               <div className="flex items-start justify-between gap-2 mb-1">
-                                <div className="min-w-0">
-                                  <p className={`text-xs font-semibold ${isDiscontinued ? 'text-amber-900' : hasAccount ? 'text-emerald-900' : 'text-slate-900'}`}>
-                                    {v.name ?? `Vendor ${v.id}`}
-                                    {isDiscontinued && <span className="ml-1.5 text-[10px] font-medium text-amber-700 bg-amber-100 px-1 py-0.5 rounded">Discontinuing</span>}
-                                  </p>
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5">
+                                    <p className={`text-xs font-semibold truncate ${isDiscontinued ? 'text-amber-900' : hasAccount ? 'text-emerald-900' : 'text-slate-900'}`}>
+                                      {displayName}
+                                      {isDiscontinued && <span className="ml-1.5 text-[10px] font-medium text-amber-700 bg-amber-100 px-1 py-0.5 rounded">Discontinuing</span>}
+                                    </p>
+                                    <button
+                                      onClick={() => {
+                                        setEditingVendorCard(v.id);
+                                        setVendorCardDraft({
+                                          displayName: ov.displayName ?? displayVendorName(v.name, `Vendor ${v.id}`),
+                                          phone:   ov.phone   ?? info?.phone   ?? '',
+                                          email:   ov.email   ?? info?.email   ?? '',
+                                          website: ov.website ?? info?.website ?? '',
+                                          repName:  ov.repName  ?? info?.rep?.name  ?? '',
+                                          repPhone: ov.repPhone ?? info?.rep?.phone ?? '',
+                                          repEmail: ov.repEmail ?? info?.rep?.email ?? '',
+                                          repTitle: ov.repTitle ?? '',
+                                        });
+                                        setInlineEdit(null);
+                                        setEditingContactsFor(null);
+                                      }}
+                                      className="flex-shrink-0 text-slate-300 hover:text-blue-500 transition-colors"
+                                      title="Edit vendor card"
+                                    >
+                                      <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    </button>
+                                  </div>
                                   {ytdSales != null && ytdSales > 0 && (
                                     <p className="text-[10px] text-slate-400">{fmt(ytdSales)} YTD</p>
                                   )}
                                   {(totalOrders > 0 || openOrders > 0) && (
                                     <p className="text-[10px] text-slate-400">
                                       {openOrders > 0 && (
-                                        <button
-                                          type="button"
-                                          onClick={() => setOrderModalVendor({ id: v.id, name: v.name ?? `Vendor ${v.id}` })}
-                                          className="text-blue-600 font-medium hover:underline focus:outline-none focus-visible:underline"
-                                        >
+                                        <button type="button" onClick={() => setOrderModalVendor({ id: v.id, name: displayName })} className="text-blue-600 font-medium hover:underline focus:outline-none">
                                           {openOrders} open ▸
                                         </button>
                                       )}
@@ -2290,71 +2431,150 @@ export default function SalesRevenue() {
                                   )}
                                 </div>
                                 <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                                  <label className="flex items-center gap-1 cursor-pointer" title="Check to mark account active">
-                                    <input
-                                      type="checkbox"
-                                      checked={hasAccount}
-                                      onChange={(e) => handleVendorAccountToggle(key, v.name ?? `Vendor ${v.id}`, e.target.checked)}
-                                      className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
-                                    />
-                                    <span className={`text-[10px] ${hasAccount ? 'text-emerald-700 font-medium' : 'text-slate-400'}`}>
-                                      {hasAccount ? 'Active' : 'Account?'}
-                                    </span>
+                                  <label className="flex items-center gap-1 cursor-pointer">
+                                    <input type="checkbox" checked={hasAccount} onChange={(e) => handleVendorAccountToggle(key, v.name ?? `Vendor ${v.id}`, e.target.checked)} className="h-3.5 w-3.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer" />
+                                    <span className={`text-[10px] ${hasAccount ? 'text-emerald-700 font-medium' : 'text-slate-400'}`}>{hasAccount ? 'Active' : 'Account?'}</span>
                                   </label>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDiscontinuedToggle(key, v.name ?? `Vendor ${v.id}`)}
-                                    className={`text-[10px] px-1.5 py-0.5 rounded border transition ${
-                                      isDiscontinued
-                                        ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200'
-                                        : 'border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'
-                                    }`}
-                                    title={isDiscontinued ? 'Click to remove discontinue flag' : 'Mark as will discontinue'}
-                                  >
+                                  <button type="button" onClick={() => handleDiscontinuedToggle(key, v.name ?? `Vendor ${v.id}`)}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded border transition ${isDiscontinued ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'}`}>
                                     {isDiscontinued ? '⚠ Discontinuing' : 'Discontinue?'}
                                   </button>
                                 </div>
                               </div>
-                              {info ? (
-                                <div className="space-y-0.5">
-                                  {info.phone && (
-                                    <a href={`tel:${info.phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1">
-                                      <span>📞</span> {info.phone}
-                                    </a>
-                                  )}
-                                  {info.email && (
-                                    <a href={`mailto:${info.email}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 truncate">
-                                      <span>✉</span> {info.email}
-                                    </a>
-                                  )}
-                                  {info.website && (
-                                    <a href={info.website} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-500 hover:underline flex items-center gap-1 truncate">
-                                      <span>🌐</span> {info.website.replace('https://','').replace('www.','')}
-                                    </a>
-                                  )}
-                                  {info.rep && (
-                                    <div className="mt-1.5 pt-1.5 border-t border-slate-200 space-y-0.5">
-                                      <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Rep</p>
-                                      <p className="text-[11px] text-slate-700 font-medium">{info.rep.name}</p>
-                                      {info.rep.phone && (
-                                        <a href={`tel:${info.rep.phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1">
-                                          <span>📞</span> {info.rep.phone}
-                                        </a>
-                                      )}
-                                      {info.rep.email && (
-                                        <a href={`mailto:${info.rep.email}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 truncate">
-                                          <span>✉</span> {info.rep.email}
-                                        </a>
-                                      )}
-                                      {info.rep.account && (
-                                        <p className="text-[11px] text-slate-500">Acct # {info.rep.account}</p>
-                                      )}
-                                    </div>
-                                  )}
+
+                              {/* ── Edit card form ── */}
+                              {isEditingCard ? (
+                                <div className="mt-2 pt-2 border-t border-slate-200 space-y-1.5 bg-white rounded-lg border border-blue-200 p-2">
+                                  <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Edit Vendor Card</p>
+                                  <label className="text-[10px] text-slate-400">Display Name</label>
+                                  <input type="text" value={vendorCardDraft.displayName ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, displayName: e.target.value }))} className={inputCls} placeholder="Display name" />
+                                  <label className="text-[10px] text-slate-400">Phone</label>
+                                  <input type="tel" value={vendorCardDraft.phone ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, phone: e.target.value }))} className={inputCls} placeholder="Phone" />
+                                  <label className="text-[10px] text-slate-400">Email</label>
+                                  <input type="email" value={vendorCardDraft.email ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, email: e.target.value }))} className={inputCls} placeholder="Email" />
+                                  <label className="text-[10px] text-slate-400">Website</label>
+                                  <input type="text" value={vendorCardDraft.website ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, website: e.target.value }))} className={inputCls} placeholder="https://..." />
+                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide pt-1">Rep</p>
+                                  <input type="text" value={vendorCardDraft.repName ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repName: e.target.value }))} className={inputCls} placeholder="Rep name" />
+                                  <input type="text" value={vendorCardDraft.repTitle ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repTitle: e.target.value }))} className={inputCls} placeholder="Rep title / role" />
+                                  <input type="tel" value={vendorCardDraft.repPhone ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repPhone: e.target.value }))} className={inputCls} placeholder="Rep phone" />
+                                  <input type="email" value={vendorCardDraft.repEmail ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repEmail: e.target.value }))} className={inputCls} placeholder="Rep email" />
+                                  <div className="flex gap-1.5 pt-1">
+                                    <button onClick={() => saveVendorCard(v.id)} className="flex-1 text-[11px] py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 transition">Save</button>
+                                    <button onClick={() => setEditingVendorCard(null)} className="flex-1 text-[11px] py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                                    {vendorOverrides[v.id] && (
+                                      <button onClick={() => resetVendorCard(v.id)} className="text-[11px] py-1 px-2 rounded border border-red-200 text-red-500 hover:bg-red-50 transition" title="Reset to defaults">Reset</button>
+                                    )}
+                                  </div>
                                 </div>
                               ) : (
-                                <p className="text-[11px] text-slate-400 italic">Contact info not available</p>
+                                /* ── Contact info display ── */
+                                <div className="space-y-0.5">
+                                  {phone && <a href={`tel:${phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"><span>📞</span>{phone}</a>}
+                                  {email && <a href={`mailto:${email}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 truncate"><span>✉</span>{email}</a>}
+                                  {website && <a href={website.startsWith('http') ? website : `https://${website}`} target="_blank" rel="noopener noreferrer" className="text-[11px] text-slate-500 hover:underline flex items-center gap-1 truncate"><span>🌐</span>{website.replace('https://','').replace('www.','')}</a>}
+                                  {hasRep && (
+                                    <div className="mt-1.5 pt-1.5 border-t border-slate-200 space-y-0.5">
+                                      <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Rep</p>
+                                      {repName && <p className="text-[11px] text-slate-700 font-medium">{repName}{repTitle && <span className="font-normal text-slate-400"> — {repTitle}</span>}</p>}
+                                      {repPhone && <a href={`tel:${repPhone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"><span>📞</span>{repPhone}</a>}
+                                      {repEmail && <a href={`mailto:${repEmail}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 truncate"><span>✉</span>{repEmail}</a>}
+                                      {info?.rep?.account && <p className="text-[11px] text-slate-500">Acct # {info.rep.account}</p>}
+                                    </div>
+                                  )}
+                                  {!phone && !email && !website && !hasRep && (
+                                    <p className="text-[11px] text-slate-400 italic">No contact info — click ✏ to add</p>
+                                  )}
+                                </div>
                               )}
+
+                              {/* ── Custom contacts ── */}
+                              {(() => {
+                                const contacts = customContacts[v.id] ?? [];
+                                const isAdding = editingContactsFor === v.id;
+                                const inputCls = "w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white";
+                                return (
+                                  <div className="mt-2 pt-2 border-t border-slate-200">
+                                    {/* Existing contacts */}
+                                    {contacts.length > 0 && (
+                                      <div className="space-y-2 mb-2">
+                                        {contacts.map((c) => {
+                                          const isEditingThis = inlineEdit?.vendorId === v.id && inlineEdit?.contactId === c.id;
+                                          if (isEditingThis) {
+                                            return (
+                                              <div key={c.id} className="bg-blue-50 border border-blue-200 rounded-lg p-2 space-y-1">
+                                                <input type="text" placeholder="Name" value={inlineEditDraft.name ?? ''} onChange={(e) => setInlineEditDraft((d) => ({ ...d, name: e.target.value }))} className={inputCls} />
+                                                <input type="text" placeholder="Title / Role" value={inlineEditDraft.title ?? ''} onChange={(e) => setInlineEditDraft((d) => ({ ...d, title: e.target.value }))} className={inputCls} />
+                                                <input type="tel" placeholder="Phone" value={inlineEditDraft.phone ?? ''} onChange={(e) => setInlineEditDraft((d) => ({ ...d, phone: e.target.value }))} className={inputCls} />
+                                                <input type="email" placeholder="Email" value={inlineEditDraft.email ?? ''} onChange={(e) => setInlineEditDraft((d) => ({ ...d, email: e.target.value }))} className={inputCls} />
+                                                <div className="flex gap-1.5 pt-0.5">
+                                                  <button onClick={() => saveInlineEdit(v.id, c.id)} className="flex-1 text-[11px] py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 transition">Save</button>
+                                                  <button onClick={() => setInlineEdit(null)} className="flex-1 text-[11px] py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                                                  <button onClick={() => { removeCustomContact(v.id, c.id); setInlineEdit(null); }} className="text-[11px] py-1 px-2 rounded border border-red-200 text-red-500 hover:bg-red-50 transition">Delete</button>
+                                                </div>
+                                              </div>
+                                            );
+                                          }
+                                          return (
+                                            <div key={c.id} className="flex items-start gap-1.5 group">
+                                              <div className="flex-1 min-w-0">
+                                                {(c.name || c.title) && (
+                                                  <p className="text-[11px] font-medium text-slate-700">
+                                                    {c.name}{c.name && c.title && <span className="font-normal text-slate-400"> — </span>}{c.title && <span className="font-normal text-slate-500">{c.title}</span>}
+                                                  </p>
+                                                )}
+                                                {c.phone && <a href={`tel:${c.phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"><span>📞</span>{c.phone}</a>}
+                                                {c.email && <a href={`mailto:${c.email}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 truncate"><span>✉</span>{c.email}</a>}
+                                              </div>
+                                              {/* Edit pencil — always visible, not just on hover */}
+                                              <button
+                                                onClick={() => { setInlineEdit({ vendorId: v.id, contactId: c.id }); setInlineEditDraft({ name: c.name ?? '', title: c.title ?? '', phone: c.phone ?? '', email: c.email ?? '' }); setEditingContactsFor(null); }}
+                                                className="flex-shrink-0 text-slate-300 hover:text-blue-500 transition-colors"
+                                                title="Edit contact"
+                                              >
+                                                <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                              </button>
+                                            </div>
+                                          );
+                                        })}
+                                      </div>
+                                    )}
+
+                                    {/* Add new contact form */}
+                                    {isAdding ? (
+                                      <div className="space-y-1.5 bg-white rounded-lg border border-blue-200 p-2">
+                                        <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">New Contact — fill any fields</p>
+                                        <input type="text" placeholder="Name" value={contactDraft.name ?? ''} onChange={(e) => setContactDraft((d) => ({ ...d, name: e.target.value }))} className={inputCls} />
+                                        <input type="text" placeholder="Title / Role" value={contactDraft.title ?? ''} onChange={(e) => setContactDraft((d) => ({ ...d, title: e.target.value }))} className={inputCls} />
+                                        <input type="tel" placeholder="Phone" value={contactDraft.phone ?? ''} onChange={(e) => setContactDraft((d) => ({ ...d, phone: e.target.value }))} className={inputCls} />
+                                        <input type="email" placeholder="Email" value={contactDraft.email ?? ''} onChange={(e) => setContactDraft((d) => ({ ...d, email: e.target.value }))} className={inputCls} />
+                                        <div className="flex gap-1.5 pt-0.5">
+                                          <button
+                                            onClick={() => addCustomContact(v.id)}
+                                            disabled={!contactDraft.name?.trim() && !contactDraft.phone?.trim() && !contactDraft.email?.trim() && !contactDraft.title?.trim()}
+                                            className="flex-1 text-[11px] py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:opacity-40 transition"
+                                          >
+                                            Save
+                                          </button>
+                                          <button
+                                            onClick={() => { setEditingContactsFor(null); setContactDraft({ name: '', title: '', phone: '', email: '' }); }}
+                                            className="flex-1 text-[11px] py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => { setEditingContactsFor(v.id); setContactDraft({ name: '', title: '', phone: '', email: '' }); setInlineEdit(null); }}
+                                        className="text-[11px] text-blue-500 hover:text-blue-700 flex items-center gap-1 transition"
+                                      >
+                                        <span className="text-base leading-none">+</span> Add contact
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         });
@@ -2384,7 +2604,12 @@ export default function SalesRevenue() {
                           <tbody className="divide-y divide-slate-50">
                             {d.orders.slice(0, 50).map((o) => (
                               <tr key={o.id} className="hover:bg-slate-50">
-                                <td className="px-4 py-2 font-mono text-slate-600">{o.public_id ?? o.id}</td>
+                                <td className="px-4 py-2 font-mono text-slate-600">
+                                  <span className="flex items-center gap-1.5">
+                                    {o.public_id ?? o.id}
+                                    <CopyPoButton po={String(o.public_id ?? o.id)} />
+                                  </span>
+                                </td>
                                 <td className="px-4 py-2 text-slate-700 max-w-[150px] truncate">{o.vendorName}</td>
                                 <td className="px-4 py-2">
                                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${o.status === 'open' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
@@ -2759,7 +2984,12 @@ export default function SalesRevenue() {
                               }}
                             >
                               <td className="px-3 py-2 text-slate-400">{isExpanded ? '▾' : '▸'}</td>
-                              <td className="px-3 py-2 font-mono text-slate-700">{o.public_id ?? o.id}</td>
+                              <td className="px-3 py-2 font-mono text-slate-700">
+                                <span className="flex items-center gap-1.5">
+                                  {o.public_id ?? o.id}
+                                  <CopyPoButton po={String(o.public_id ?? o.id)} />
+                                </span>
+                              </td>
                               <td className="px-3 py-2">
                                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${o.status === 'open' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
                                   {o.status}
@@ -3480,6 +3710,31 @@ function TopPerformersPanel({
         )}
       </div>
     </div>
+  );
+}
+
+// ── Copy PO number button ─────────────────────────────────────────────
+function CopyPoButton({ po }: { po: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy(e: React.MouseEvent) {
+    e.stopPropagation();
+    void navigator.clipboard.writeText(po).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      title={`Copy PO# ${po}`}
+      className="flex-shrink-0 text-slate-300 hover:text-blue-500 transition-colors"
+      aria-label={`Copy PO number ${po}`}
+    >
+      {copied
+        ? <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+        : <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+      }
+    </button>
   );
 }
 

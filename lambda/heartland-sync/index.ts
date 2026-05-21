@@ -503,10 +503,16 @@ async function syncPurchasing(secret: HeartlandSecret): Promise<{
     .sort((a, b) => b.totalReceivedQty - a.totalReceivedQty)
     .map((v, i) => ({ ...v, rank: i + 1 }));
 
-  // Only store open/pending orders to stay under DynamoDB 400KB item limit
-  const openOrders = enrichedOrders
+  // Only store open/pending orders — use allOrders (full history) so the
+  // modal count matches the vendorRank.openOrders count exactly.
+  // allOrders already contains every page; filter to open/pending only.
+  const openOrders = allOrders
     .filter((o) => o.status === 'open' || o.status === 'pending')
-    .slice(0, 200);
+    .map((o) => ({
+      ...o,
+      vendorName: o.vendor_id ? (vendorMap[o.vendor_id] ?? `Vendor ${o.vendor_id}`) : 'Unknown',
+    }))
+    .slice(0, 500); // DynamoDB 400KB limit — 500 orders is ~200KB
 
   // Store vendors + rank in one item, open orders in another (keeps each under 400KB)
   await Promise.all([
