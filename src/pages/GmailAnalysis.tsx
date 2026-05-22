@@ -526,53 +526,101 @@ export default function GmailAnalysis() {
               <p className="text-sm text-slate-700 leading-relaxed">{result.overview}</p>
             </section>
 
-            {/* Follow-ups Needed — surfaced near the top so the most action-
-                oriented section is impossible to miss. */}
-            <section className="bg-white rounded-xl border border-slate-200 p-5">
-              <SectionHeader
-                icon={ListTodo}
-                title="Follow-ups Needed"
-                count={result.followUpsNeeded.length}
-                iconClass="bg-rose-100 text-rose-700"
-              />
-              {result.followUpsNeeded.length === 0 ? (
-                <EmptyState message="Inbox is clear — no obvious follow-ups." />
-              ) : (
-                <ul className="space-y-3">
-                  {result.followUpsNeeded.map((f, i) => {
-                    const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
-                    const hasSingleId = linkIds.length === 1;
-                    return (
+            {/* Row 2: Follow-ups + Invoices side-by-side. Both are
+                action-oriented sections the owner needs to triage first. */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Follow-ups Needed */}
+              <section className="bg-white rounded-xl border border-slate-200 p-5">
+                <SectionHeader
+                  icon={ListTodo}
+                  title="Follow-ups Needed"
+                  count={result.followUpsNeeded.length}
+                  iconClass="bg-rose-100 text-rose-700"
+                />
+                {result.followUpsNeeded.length === 0 ? (
+                  <EmptyState message="Inbox is clear — no obvious follow-ups." />
+                ) : (
+                  <ul className="space-y-3">
+                    {result.followUpsNeeded.map((f, i) => {
+                      const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
+                      const hasSingleId = linkIds.length === 1;
+                      return (
+                        <li
+                          key={i}
+                          className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
+                        >
+                          <p className="text-sm font-medium text-slate-900">{f.title}</p>
+                          <p className="text-xs text-slate-600 mt-1">{f.why}</p>
+                          {hasSingleId ? (
+                            <a
+                              href={gmailMessageUrl(linkIds[0]!)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-xs text-rose-700 mt-1.5 font-medium hover:text-rose-900 hover:underline"
+                            >
+                              → {f.suggestedAction}
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ) : (
+                            <p className="text-xs text-rose-700 mt-1.5 font-medium">
+                              → {f.suggestedAction}
+                            </p>
+                          )}
+                          {!hasSingleId && (
+                            <MessageLinks ids={linkIds} label="Reply in Gmail" />
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+
+              {/* Invoices & Bills */}
+              <section className="bg-white rounded-xl border border-slate-200 p-5">
+                <SectionHeader
+                  icon={Receipt}
+                  title="Invoices & Bills"
+                  count={result.invoices.length}
+                  iconClass="bg-amber-100 text-amber-700"
+                />
+                {result.invoices.length === 0 ? (
+                  <EmptyState message="No invoices in this window." />
+                ) : (
+                  <ul className="space-y-2">
+                    {result.invoices.map((inv, i) => (
                       <li
                         key={i}
-                        className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
+                        className="flex items-start justify-between gap-3 py-2 border-b last:border-0 border-slate-100"
                       >
-                        <p className="text-sm font-medium text-slate-900">{f.title}</p>
-                        <p className="text-xs text-slate-600 mt-1">{f.why}</p>
-                        {hasSingleId ? (
-                          <a
-                            href={gmailMessageUrl(linkIds[0]!)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-rose-700 mt-1.5 font-medium hover:text-rose-900 hover:underline"
-                          >
-                            → {f.suggestedAction}
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        ) : (
-                          <p className="text-xs text-rose-700 mt-1.5 font-medium">
-                            → {f.suggestedAction}
-                          </p>
-                        )}
-                        {!hasSingleId && (
-                          <MessageLinks ids={linkIds} label="Reply in Gmail" />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900">{inv.vendor}</p>
+                          <p className="text-xs text-slate-600 mt-0.5">{inv.summary}</p>
+                          {inv.dueDate && (
+                            <p className="text-[11px] text-amber-700 mt-1">Due: {inv.dueDate}</p>
+                          )}
+                          <MessageLinks
+                            ids={
+                              inv.sourceThreadId
+                                ? [inv.sourceThreadId]
+                                : inv.sourceMessageId
+                                ? [inv.sourceMessageId]
+                                : undefined
+                            }
+                            label="Open invoice"
+                          />
+                        </div>
+                        {inv.amount != null && (
+                          <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
+                            ${inv.amount.toFixed(2)}
+                          </span>
                         )}
                       </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </section>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Events */}
@@ -652,50 +700,7 @@ export default function GmailAnalysis() {
                 )}
               </section>
 
-              {/* Invoices */}
-              <section className="bg-white rounded-xl border border-slate-200 p-5">
-                <SectionHeader
-                  icon={Receipt}
-                  title="Invoices & Bills"
-                  count={result.invoices.length}
-                  iconClass="bg-amber-100 text-amber-700"
-                />
-                {result.invoices.length === 0 ? (
-                  <EmptyState message="No invoices in this window." />
-                ) : (
-                  <ul className="space-y-2">
-                    {result.invoices.map((inv, i) => (
-                      <li
-                        key={i}
-                        className="flex items-start justify-between gap-3 py-2 border-b last:border-0 border-slate-100"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-slate-900">{inv.vendor}</p>
-                          <p className="text-xs text-slate-600 mt-0.5">{inv.summary}</p>
-                          {inv.dueDate && (
-                            <p className="text-[11px] text-amber-700 mt-1">Due: {inv.dueDate}</p>
-                          )}
-                          <MessageLinks
-                            ids={
-                              inv.sourceThreadId
-                                ? [inv.sourceThreadId]
-                                : inv.sourceMessageId
-                                ? [inv.sourceMessageId]
-                                : undefined
-                            }
-                            label="Open invoice"
-                          />
-                        </div>
-                        {inv.amount != null && (
-                          <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
-                            ${inv.amount.toFixed(2)}
-                          </span>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
+              {/* Invoices section moved to row 2 (alongside Follow-ups). */}
 
               {/* Customer inquiries */}
               <section className="bg-white rounded-xl border border-slate-200 p-5">
