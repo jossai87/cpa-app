@@ -15,6 +15,9 @@ import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import * as route53 from 'aws-cdk-lib/aws-route53';
 import * as route53Targets from 'aws-cdk-lib/aws-route53-targets';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import { Construct } from 'constructs';
 
 // Custom domain config — manually-provisioned ACM cert in us-east-1
@@ -847,7 +850,12 @@ export class FootSolutionsStack extends Stack {
       handler: 'handler',
       projectRoot: '../lambda',
       depsLockFilePath: '../lambda/package-lock.json',
-      timeout: Duration.minutes(2),
+      // 5 minutes — analyze runs against ~1400 cached msgs and may take
+      // 2-3 minutes on a cold start with multiple tool-call rounds.
+      // The synchronous API Gateway path returns in <1s; longer runs are
+      // self-invoked async (InvocationType: Event) to bypass the 30s API GW
+      // integration timeout.
+      timeout: Duration.minutes(5),
       memorySize: 512,
       environment: {
         TABLE_NAME: table.tableName,
@@ -893,7 +901,7 @@ export class FootSolutionsStack extends Stack {
       })
     );
 
-    // Secrets Manager read on Gmail OAuth client + refresh token
+    // Secrets Manager read on Gmail OAuth client + refresh token + Tavily API key
     gmailAnalysisFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'GmailAnalysisGmailSecrets',
@@ -901,6 +909,22 @@ export class FootSolutionsStack extends Stack {
         actions: ['secretsmanager:GetSecretValue'],
         resources: [
           `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/tavily/*`,
+        ],
+      })
+    );
+
+    // Allow self-invocation (async background analyze runs that bypass the
+    // 30s API Gateway integration timeout). Using addToRolePolicy with a
+    // wildcard ARN avoids the circular CFN dependency that grantInvoke()
+    // creates when a function references itself.
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisSelfInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:us-east-1:${this.account}:function:foot-solutions-gmail-analysis`,
         ],
       })
     );
@@ -928,6 +952,150 @@ export class FootSolutionsStack extends Stack {
       integration: gmailAnalysisIntegration,
       authorizer: jwtAuthorizer,
     });
+    httpApi.addRoutes({
+      path: '/pos/daily-highlights',
+      methods: [apigwv2.HttpMethod.POST, apigwv2.HttpMethod.GET],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // ── 10b1.5. S3 Vectors index + SQS queue + embed Lambda ──────────
+    //
+    // This block stands up the semantic-search backbone for the chatbot:
+    //   • S3 Vectors bucket + index (1024-dim, cosine, Cohere v3 multilingual)
+    //   • SQS queue + DLQ for embed jobs (gmail-sync → gmail-embed)
+    //   • Gmail Embed Lambda (SQS → Cohere → PutVectors)
+    //   • Wires gmail-sync to enqueue and gmail-analysis to query
+
+    // S3 Vectors bucket + index
+    // Vector bucket name must be globally unique within an account+region,
+    // 3–63 chars, lowercase + digits + hyphens.
+    const VECTOR_INDEX_NAME = 'gmail-messages';
+    const vectorBucketName = `fs-gmail-vectors-${this.account}`;
+    const vectorBucket = new s3vectors.CfnVectorBucket(this, 'GmailVectorBucket', {
+      vectorBucketName,
+      encryptionConfiguration: { sseType: 'AES256' },
+    });
+    const vectorIndex = new s3vectors.CfnIndex(this, 'GmailVectorIndex', {
+      vectorBucketName,
+      indexName: VECTOR_INDEX_NAME,
+      dataType: 'float32',
+      dimension: 1024, // Cohere v3 multilingual returns 1024 floats
+      distanceMetric: 'cosine',
+      metadataConfiguration: {
+        // Body preview is preserved alongside the vector so search hits
+        // can be summarized without a follow-up DDB read. Marked
+        // non-filterable since it's free-text (large + not useful as a filter).
+        nonFilterableMetadataKeys: ['bodyPreview'],
+      },
+    });
+    vectorIndex.addDependency(vectorBucket);
+
+    const vectorBucketArn = `arn:aws:s3vectors:${this.region}:${this.account}:bucket/${vectorBucketName}`;
+    const vectorIndexArn = `${vectorBucketArn}/index/${VECTOR_INDEX_NAME}`;
+
+    // SQS: gmail-sync → gmail-embed
+    const gmailEmbedDLQ = new sqs.Queue(this, 'GmailEmbedDLQ', {
+      queueName: 'foot-solutions-gmail-embed-dlq',
+      retentionPeriod: Duration.days(14),
+      enforceSSL: true,
+    });
+    Tags.of(gmailEmbedDLQ).add('Component', 'ai-gmail-analysis');
+
+    const gmailEmbedQueue = new sqs.Queue(this, 'GmailEmbedQueue', {
+      queueName: 'foot-solutions-gmail-embed',
+      // Visibility timeout must exceed the embed Lambda timeout (60s).
+      visibilityTimeout: Duration.minutes(2),
+      retentionPeriod: Duration.days(7),
+      enforceSSL: true,
+      deadLetterQueue: { queue: gmailEmbedDLQ, maxReceiveCount: 3 },
+    });
+    Tags.of(gmailEmbedQueue).add('Component', 'ai-gmail-analysis');
+
+    // Gmail Embed Lambda — SQS-triggered
+    const gmailEmbedFn = new nodejs.NodejsFunction(this, 'GmailEmbedHandler', {
+      functionName: 'foot-solutions-gmail-embed',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/gmail-embed/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      timeout: Duration.minutes(1),
+      memorySize: 512,
+      environment: {
+        TABLE_NAME: table.tableName,
+        OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
+        VECTOR_BUCKET_NAME: vectorBucketName,
+        VECTOR_INDEX_NAME,
+        EMBED_MODEL_ID: 'cohere.embed-multilingual-v3',
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Embeds Gmail messages with Cohere v3 multilingual and writes to S3 Vectors',
+    });
+    Tags.of(gmailEmbedFn).add('Component', 'ai-gmail-analysis');
+
+    // Read cached message bodies
+    table.grantReadData(gmailEmbedFn);
+
+    // Bedrock InvokeModel — Cohere v3 multilingual (us-east-1 in-region only)
+    gmailEmbedFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailEmbedBedrockInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-multilingual-v3`,
+        ],
+      })
+    );
+
+    // S3 Vectors PutVectors on the index
+    gmailEmbedFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailEmbedVectorWrite',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3vectors:PutVectors', 's3vectors:GetIndex'],
+        resources: [vectorBucketArn, vectorIndexArn],
+      })
+    );
+
+    // SQS event source — partial batch failure reporting so a single bad
+    // message doesn't fail the whole batch.
+    gmailEmbedFn.addEventSource(
+      new lambdaEventSources.SqsEventSource(gmailEmbedQueue, {
+        batchSize: 10,
+        maxBatchingWindow: Duration.seconds(10),
+        reportBatchItemFailures: true,
+      })
+    );
+
+    // Wire gmail-analysis to query the index (Cohere embed + S3 Vectors query)
+    gmailAnalysisFn.addEnvironment('VECTOR_BUCKET_NAME', vectorBucketName);
+    gmailAnalysisFn.addEnvironment('VECTOR_INDEX_NAME', VECTOR_INDEX_NAME);
+    gmailAnalysisFn.addEnvironment('EMBED_MODEL_ID', 'cohere.embed-multilingual-v3');
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisEmbedQuery',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-multilingual-v3`,
+        ],
+      })
+    );
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisVectorQuery',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3vectors:QueryVectors', 's3vectors:GetIndex'],
+        resources: [vectorBucketArn, vectorIndexArn],
+      })
+    );
 
     // ── 10b2. Gmail Sync Lambda (backfill + daily incremental) ───────
     const gmailSyncFn = new nodejs.NodejsFunction(this, 'GmailSyncHandler', {
@@ -969,6 +1137,10 @@ export class FootSolutionsStack extends Stack {
         ],
       })
     );
+
+    // Wire gmail-sync to enqueue embed jobs (write side of the KB)
+    gmailSyncFn.addEnvironment('EMBED_QUEUE_URL', gmailEmbedQueue.queueUrl);
+    gmailEmbedQueue.grantSendMessages(gmailSyncFn);
 
     // EventBridge cron — daily at 06:00 UTC ≈ 1am Central (incremental sync)
     new events.Rule(this, 'GmailSyncDailySchedule', {
@@ -1059,17 +1231,20 @@ export class FootSolutionsStack extends Stack {
       })
     );
 
-    // Grant Secrets Manager read for Gmail OAuth credentials + refresh token.
+    // Grant Secrets Manager read for Gmail OAuth credentials + refresh token
+    // and the Tavily API key (used for daily-highlights-style enrichment).
     // The secrets are created manually (one-time bootstrap) and named:
     //   foot-solutions/gmail/oauth-client    — { client_id, client_secret }
     //   foot-solutions/gmail/refresh-token   — { refresh_token, email }
+    //   foot-solutions/tavily/api-key        — { apiKey }
     dailyReportFn.addToRolePolicy(
       new iam.PolicyStatement({
-        sid: 'DailyReportGmailSecrets',
+        sid: 'DailyReportSecrets',
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:GetSecretValue'],
         resources: [
           `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
+          `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/tavily/*`,
         ],
       })
     );

@@ -52,6 +52,7 @@ credentials/
 client_secret*.json
 token*.json
 *.oauth.json
+.tav*.json
 
 # ── Vite ─────────────────────────────────────────────────────────────
 vite.config.js.timestamp-*

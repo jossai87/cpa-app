@@ -29,6 +29,13 @@ import {
 } from '@aws-sdk/client-bedrock-runtime';
 import { SESv2Client, SendEmailCommand } from '@aws-sdk/client-sesv2';
 import { searchEmails, getMessage, summarizeRecentVendorMail } from '../gmail/client';
+import {
+  cacheQuery,
+  cacheRead,
+  cacheVendorActivity,
+  type CachedQueryArgs,
+} from '../gmail-analysis/cache';
+import { tavilySearch } from '../shared/tavily';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -340,6 +347,81 @@ const TOOLS: Tool[] = [
       },
     },
   },
+  // ── Cache-backed Gmail tools (faster than live Gmail) ────────────
+  {
+    toolSpec: {
+      name: 'cache_query',
+      description: "Query the local Gmail cache (rolling ~6 month window). Use kind=corporate / franchise / vendor / customer / invoice with since/until to scope. Faster than live Gmail. Use this BEFORE search_inbox.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            vendor: { type: 'string', description: 'Vendor brand (Brooks, Dansko, etc.)' },
+            kind: {
+              type: 'string',
+              enum: ['invoice', 'vendor', 'customer', 'corporate', 'franchise', 'internal'],
+            },
+            since: { type: 'string', description: 'YYYY-MM-DD inclusive' },
+            until: { type: 'string', description: 'YYYY-MM-DD inclusive' },
+            from: { type: 'string', description: 'From-header substring' },
+            text: { type: 'string', description: 'Subject/snippet substring' },
+            limit: { type: 'number', description: 'Default 25, max 100' },
+          },
+          required: [],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'cache_vendor_activity',
+      description: "Quickly summarize a vendor's email activity over the last N days: message count, last contact date, top senders, top subjects. Use to answer 'how active is Brooks' or 'when did Aetrex last reach out'.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            vendor: { type: 'string' },
+            days: { type: 'number', description: 'Default 90, max 365' },
+          },
+          required: ['vendor'],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'cache_read',
+      description: 'Read full body of a cached email. Provide dateOnly for fastest path.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            dateOnly: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
+    },
+  },
+  // ── Web search (Tavily) ──────────────────────────────────────────
+  {
+    toolSpec: {
+      name: 'web_search',
+      description: "Tavily news search. Use SPARINGLY (max 2 calls per email) to verify a vendor announcement or local event before recommending it. Examples: 'Foot Solutions corporate news 2026', 'Brooks running launch this week', 'Flower Mound Senior Center events May 2026'.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            days: { type: 'number', description: 'Last N days (default 7).' },
+            maxResults: { type: 'number' },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
 ];
 
 // ── Tool execution ──────────────────────────────────────────────────
@@ -554,6 +636,54 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       }
     }
 
+    case 'cache_query': {
+      try {
+        return JSON.stringify(await cacheQuery(input as CachedQueryArgs));
+      } catch (err) {
+        return JSON.stringify({ error: `cache_query failed: ${(err as Error).message}` });
+      }
+    }
+
+    case 'cache_vendor_activity': {
+      const vendor = String(input['vendor'] ?? '');
+      if (!vendor) return JSON.stringify({ error: 'vendor is required' });
+      const days = Math.min(Number(input['days']) || 90, 365);
+      try {
+        return JSON.stringify(await cacheVendorActivity(vendor, days));
+      } catch (err) {
+        return JSON.stringify({ error: `cache_vendor_activity failed: ${(err as Error).message}` });
+      }
+    }
+
+    case 'cache_read': {
+      const id = String(input['id'] ?? '');
+      if (!id) return JSON.stringify({ error: 'id is required' });
+      const dateOnly = String(input['dateOnly'] ?? '') || undefined;
+      try {
+        const m = await cacheRead(id, dateOnly);
+        return JSON.stringify(m ?? { error: `Message ${id} not in cache` });
+      } catch (err) {
+        return JSON.stringify({ error: `cache_read failed: ${(err as Error).message}` });
+      }
+    }
+
+    case 'web_search': {
+      const query = String(input['query'] ?? '');
+      if (!query) return JSON.stringify({ error: 'query is required' });
+      try {
+        return JSON.stringify(
+          await tavilySearch(query, {
+            topic: 'news',
+            days: Math.min(Number(input['days']) || 7, 30),
+            maxResults: Math.min(Number(input['maxResults']) || 5, 10),
+            includeAnswer: true,
+          })
+        );
+      } catch (err) {
+        return JSON.stringify({ error: `web_search failed: ${(err as Error).message}` });
+      }
+    }
+
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -571,37 +701,49 @@ Your job: write a TIGHT daily briefing email for the new owner. Quality over qua
 The owner will stop reading anything that's too long.
 
 HARD CONSTRAINTS:
-- Total email body MUST be 180 words or fewer
-- 3-4 short sections, no walls of text
+- Total email body MUST be 220 words or fewer (was 180; bumped to fit the optional Network Heads-up section without crowding the rest)
+- 3-5 short sections, no walls of text
 - Every recommendation MUST include a verified contact (name OR phone) and address
 - Use real data — call tools to fetch actual numbers, never guess
 - Tone: confident, direct, like a sharp consultant — never wishy-washy
 - Store is CLOSED Sunday & Monday. Never suggest events on Sun/Mon.
 
-═══ INBOX ACCESS (NEW — use thoughtfully) ═══
-You have read-only access to the owner's Gmail inbox via three tools:
-  - scan_recent_vendor_emails: quick 14-day overview of vendor + Roland/Janell mentions
-  - search_inbox: targeted Gmail-syntax search ("from:dansko newer_than:7d")
-  - read_email: full body of a specific message
+═══ INBOX ACCESS — cache-first, live as fallback ═══
+You have read access to a LOCAL CACHE of the owner's Gmail (rolling ~6 month window) plus live Gmail as a fallback. The cache classifies every message by kind:
+  - vendor   = from a known vendor brand or domain (Brooks, Dansko, Aetrex, etc.)
+  - corporate= from Foot Solutions HQ (leadership, ops, marketing — Taylor, John, Jordan, Don, Gary, etc., plus production@, customerservice@, QuickBooks notifications, Voxelcare)
+  - franchise= from a sister Foot Solutions store (katy@, greenville@, acworth@, etc.)
+  - customer = inbound customer messages (appointment requests, fitting questions, complaints)
+  - invoice  = bills with a dollar amount or due date
+  - internal = mail from this store's own address (flowermound@)
 
-Roland and Janell are the prior owners — references to them in the inbox often
-contain handoff context, vendor relationships, or unfinished commitments.
+PREFER cache tools — they're faster and free:
+  - cache_query({ kind, vendor?, since, until, from?, text?, limit })
+  - cache_vendor_activity(vendor, days?)   — vendor rollup with last contact + top senders
+  - cache_read(id, dateOnly?)              — full body of a cached email
 
-WHEN TO USE INBOX TOOLS:
-- Once per email run: call scan_recent_vendor_emails to surface anything new
-- If a specific vendor is in today's data (low stock, slowing brand), search
-  for recent emails from that vendor — they may have replied with backorder
-  dates, new collections, or a rep visit offer
-- If you're recommending an event, search the inbox first — there may already
-  be an invitation or a contact thread you can leverage
+Live Gmail tools (only when cache doesn't cover what you need):
+  - scan_recent_vendor_emails(days?)       — fast 14-day vendor sweep
+  - search_inbox(query, max?)              — Gmail-syntax targeted search
+  - read_email(id)                         — live full body fetch
+
+═══ WEB SEARCH (Tavily) — sparingly ═══
+- web_search(query, days?, maxResults?) — last-N-day news. Use AT MOST 2 calls per email.
+- Good uses: confirm a vendor announcement worth flagging, look up a Flower Mound or Denton County event date you're not 100% sure about.
+- Bad uses: routine vendor names, generic queries. Skip if you don't have a sharp question.
+
+═══ HOW TO USE THESE TOOLS IN THE BRIEFING ═══
+- Vendor stories: combine cache_vendor_activity + (optionally) one web_search for industry context.
+- Corporate signals: cache_query({ kind: 'corporate', since: '<7 days ago>' }) → flag if HQ sent a regional sales report, marketing minute, training call, council vote, or system maintenance notice the owner should act on.
+- Franchise signals: cache_query({ kind: 'franchise', since: '<3 days ago>' }) → mention if sister stores are reporting wins/losses on shared threads (peer benchmarks).
+- Customer signals: cache_query({ kind: 'customer', since: '<3 days ago>' }) → flag unanswered appointment requests / fitting questions.
 
 WHEN NOT TO USE INBOX TOOLS:
 - Do not list random emails. Inbox hits should only inform recommendations.
 - Do not quote email content verbatim in the briefing — paraphrase briefly.
 - Do not reference personal/sensitive content. Stick to business signals.
 
-If an inbox finding produces a strong follow-up, record_opportunity with
-priority based on time-sensitivity (e.g. unanswered Brooks rep email = 7).
+If an inbox finding produces a strong follow-up, record_opportunity with priority based on time-sensitivity.
 
 ═══ MEMORY & CONTINUITY (this is critical) ═══
 You are the same agent every night. Use the opportunity ledger to keep
@@ -659,6 +801,16 @@ REQUIRED EMAIL STRUCTURE:
 🏥 ONE QUICK INSIGHT (1 sentence):
    A small but impactful observation about today's data — e.g. margin opportunity,
    a brand that's slowing, a customer pattern.
+
+📨 NETWORK HEADS-UP (0-2 lines, only when there is real signal):
+   - Anything from HQ today/yesterday that needs action: regional report deadline,
+     marketing minute with a CTA, council vote, system maintenance, training call,
+     leadership announcement. Keep it to one sentence per item.
+   - If a sister store posted something relevant on a shared thread (a vendor tip,
+     a customer outcome, a regional trend), summarize it in one sentence.
+   - Skip this section entirely if nothing new from corporate or sister stores
+     reaches the bar of "owner action or awareness needed."
+   - Always cite the source: "(HQ — Taylor, Mon)" or "(Katy store, Sun)".
 
 DO NOT include generic advice. DO NOT pad. DO NOT explain your reasoning in the email.
 DO NOT mention the opportunity ledger system to the reader — keep it invisible.

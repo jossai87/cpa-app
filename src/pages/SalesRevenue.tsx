@@ -27,6 +27,8 @@ import CentralTimeBadge from '../components/CentralTimeBadge';
 import { downloadCsvSections, stampedName, csvNum, type CsvSection } from '../lib/csv';
 import SalesChat from '../components/SalesChat';
 import VendorHealthCard from '../components/VendorHealthCard';
+import DailyHighlightsCard from '../components/DailyHighlightsCard';
+import OrderRow from '../components/OrderRow';
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -645,7 +647,7 @@ function HourlyHeatmap({ data }: { data: Array<{ hour: number; label: string; am
 
 // ── Tab definitions ───────────────────────────────────────────────────
 
-type Tab = 'overview' | 'analytics' | 'inventory' | 'staff' | 'purchasing' | 'reporting' | 'insights';
+type Tab = 'overview' | 'analytics' | 'inventory' | 'vendors' | 'staff' | 'purchasing' | 'reporting' | 'insights';
 
 // ── Main page ─────────────────────────────────────────────────────────
 
@@ -754,9 +756,10 @@ export default function SalesRevenue() {
     setFilterEnd(end);
   }
 
-  // Staff date selector — defaults to YTD (matches old behavior)
+  // Staff date selector — defaults to Month-to-date (most useful for
+  // commission decisions; YTD is one click away).
   type StaffPeriod = 'today' | '7d' | '30d' | 'monthly' | 'ytd' | 'custom';
-  const [staffPeriod, setStaffPeriod] = useState<StaffPeriod>('ytd');
+  const [staffPeriod, setStaffPeriod] = useState<StaffPeriod>('monthly');
   const [staffCustomStart, setStaffCustomStart] = useState<string>('');
   const [staffCustomEnd, setStaffCustomEnd] = useState<string>('');
 
@@ -809,7 +812,7 @@ export default function SalesRevenue() {
     queryKey: ['pos', 'analytics', analyticsDays],
     queryFn: () => api.get<AnalyticsResponse>(`/pos/analytics?days=${analyticsDays}`).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
-    enabled: tab === 'analytics' || tab === 'overview',
+    enabled: tab === 'analytics' || tab === 'overview' || tab === 'purchasing',
   });
 
   const inventoryQ = useQuery<InventoryResponse>({
@@ -839,7 +842,7 @@ export default function SalesRevenue() {
     queryKey: ['pos', 'purchasing'],
     queryFn: () => api.get<PurchasingResponse>('/pos/purchasing').then((r) => r.data),
     staleTime: 30 * 60 * 1000,
-    enabled: tab === 'purchasing',
+    enabled: tab === 'purchasing' || tab === 'vendors',
   });
 
   const reportingQ = useQuery<ReportingResponse>({
@@ -1052,9 +1055,10 @@ export default function SalesRevenue() {
   const tabs: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
     { id: 'overview', label: 'Overview', icon: TrendingUp },
     { id: 'purchasing', label: 'Purchasing', icon: ShoppingBag },
+    { id: 'inventory', label: 'Inventory', icon: Package },
+    { id: 'vendors', label: 'Vendors', icon: Users },
     { id: 'analytics', label: 'Trends', icon: BarChart3Icon },
     { id: 'insights', label: 'Performance', icon: LightbulbIcon },
-    { id: 'inventory', label: 'Inventory', icon: Package },
     { id: 'staff', label: 'Staff', icon: Users },
     ...(showReportingTab ? [{ id: 'reporting' as const, label: 'Reporting', icon: BarChart3Icon }] : []),
   ];
@@ -1065,6 +1069,7 @@ export default function SalesRevenue() {
     if (tab === 'inventory') void inventoryQ.refetch();
     if (tab === 'staff') void staffQ.refetch();
     if (tab === 'purchasing') void purchasingQ.refetch();
+    if (tab === 'vendors') void purchasingQ.refetch();
     if (tab === 'reporting') void reportingQ.refetch();
     if (tab === 'insights') {
       void reportingQ.refetch();
@@ -1574,66 +1579,49 @@ export default function SalesRevenue() {
         {/* ── OVERVIEW TAB ── */}
         {tab === 'overview' && (
           <div className="space-y-6">
-            {/* ── Date filter bar ── */}
-            <div className="bg-white rounded-xl border border-slate-200 px-5 py-4">
-              <div className="flex flex-wrap items-end gap-4">
-                {/* Preset dropdown */}
-                <div className="flex flex-col gap-1 min-w-[180px]">
-                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Dates</label>
-                  <div className="relative">
-                    <select
-                      value={datePreset}
-                      onChange={(e) => applyPreset(e.target.value as DatePreset)}
-                      className="w-full appearance-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-8 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-                    >
-                      {(Object.keys(PRESET_LABELS) as DatePreset[]).map((p) => (
-                        <option key={p} value={p}>{PRESET_LABELS[p]}</option>
-                      ))}
-                    </select>
-                    <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400">▾</span>
-                  </div>
+            {/* ── Date filter bar (compact, top of tab) ── */}
+            <div className="bg-white rounded-xl border border-slate-200 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
+                  Dates
+                </span>
+                <div className="relative">
+                  <select
+                    value={datePreset}
+                    onChange={(e) => applyPreset(e.target.value as DatePreset)}
+                    aria-label="Date preset"
+                    className="appearance-none rounded-md border border-slate-300 bg-white pl-2 pr-6 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    {(Object.keys(PRESET_LABELS) as DatePreset[]).map((p) => (
+                      <option key={p} value={p}>{PRESET_LABELS[p]}</option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
                 </div>
-
-                {/* Start date */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Start</label>
-                  <div className="relative">
-                    <input
-                      type="date"
-                      value={filterStart}
-                      onChange={(e) => { setFilterStart(e.target.value); setDatePreset('custom'); }}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      aria-label="Start date"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-base">📅</span>
-                  </div>
-                </div>
-
-                {/* End date */}
-                <div className="flex flex-col gap-1">
-                  <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">End</label>
-                  <div className="relative">
-                    <input
-                      type="date"
-                      value={filterEnd}
-                      onChange={(e) => { setFilterEnd(e.target.value); setDatePreset('custom'); }}
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2.5 pr-10 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      aria-label="End date"
-                    />
-                    <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-base">📅</span>
-                  </div>
-                </div>
-
-                {/* Active range label */}
+                <input
+                  type="date"
+                  value={filterStart}
+                  onChange={(e) => { setFilterStart(e.target.value); setDatePreset('custom'); }}
+                  aria-label="Start date"
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-slate-400 text-xs">–</span>
+                <input
+                  type="date"
+                  value={filterEnd}
+                  onChange={(e) => { setFilterEnd(e.target.value); setDatePreset('custom'); }}
+                  aria-label="End date"
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
                 {filterStart && filterEnd && (
-                  <p className="text-xs text-slate-400 self-end pb-2.5">
+                  <span className="text-[11px] text-slate-400 hidden sm:inline">
                     {new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                     {' – '}
                     {new Date(filterEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </p>
+                  </span>
                 )}
 
-                {/* ── Beat Last Year widget ── */}
+                {/* ── Beat Last Year widget — compact, right-aligned ── */}
                 {dashQ.data?.lastYear && (() => {
                   const lyAmount = dashQ.data.lastYear!.selectedRange?.totalAmount
                     ?? dashQ.data.lastYear!.today.totalAmount;
@@ -1645,30 +1633,31 @@ export default function SalesRevenue() {
                     ? new Date(filterStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
                     : 'same day';
                   return (
-                    <div className={`ml-auto self-end flex flex-col items-end gap-0.5 rounded-xl px-4 py-2.5 border ${alreadyBeaten ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-                        {alreadyBeaten ? '🏆 Beat Last Year' : `To Beat Last Year (${lyDate})`}
-                      </p>
-                      {alreadyBeaten ? (
-                        <p className="text-lg font-bold text-emerald-600 leading-tight">
-                          +{fmtDec(Math.abs(toBeat))} ahead
-                        </p>
-                      ) : (
-                        <p className="text-lg font-bold text-blue-700 leading-tight">
-                          {fmtDec(toBeat)} needed
-                        </p>
-                      )}
-                      <p className="text-[10px] text-slate-400">
-                        LY: {fmtDec(lyAmount)} · Now: {fmtDec(currentAmount)}
-                      </p>
+                    <div className={`ml-auto flex items-center gap-2 rounded-md px-2.5 py-1 border ${alreadyBeaten ? 'bg-emerald-50 border-emerald-200' : 'bg-blue-50 border-blue-200'}`}>
+                      <span className="text-[9px] font-semibold uppercase tracking-wide text-slate-500 leading-tight">
+                        {alreadyBeaten ? '🏆 Beat LY' : `To beat LY · ${lyDate}`}
+                      </span>
+                      <span
+                        className={`text-sm font-bold leading-tight ${alreadyBeaten ? 'text-emerald-600' : 'text-blue-700'}`}
+                        title={`LY: ${fmtDec(lyAmount)} · Now: ${fmtDec(currentAmount)}`}
+                      >
+                        {alreadyBeaten ? `+${fmtDec(Math.abs(toBeat))} ahead` : `${fmtDec(toBeat)} needed`}
+                      </span>
                     </div>
                   );
                 })()}
               </div>
             </div>
 
+            {/* ── KPI metric cards (vs last year) — moved to top per owner request ── */}
             {dashQ.isLoading && <LoadingState label="Loading sales data from Heartland…" />}
             {dashQ.isError && <ErrorState error={dashQ.error} />}
+            {dashQ.data && (
+              <KpiGrid data={dashQ.data} reportingData={reportingQ.data ?? null} filterStart={filterStart} filterEnd={filterEnd} />
+            )}
+
+            <DailyHighlightsCard />
+
             {dashQ.data && (
               <>
                 {/* ── Alerts + Notes row ── */}
@@ -1680,9 +1669,6 @@ export default function SalesRevenue() {
                     <NotesPanel />
                   </div>
                 </div>
-
-                {/* ── KPI metric cards (vs last year) ── */}
-                <KpiGrid data={dashQ.data} reportingData={reportingQ.data ?? null} filterStart={filterStart} filterEnd={filterEnd} />
 
                 {/* ── Inventory Turn Rate — compact overview card ── */}
                 {inventoryQ.data && !inventoryQ.data.notReady && (() => {
@@ -1864,20 +1850,7 @@ export default function SalesRevenue() {
                       <p className="text-xs text-slate-400 mt-3">Darker = more revenue. Based on local store time.</p>
                     </div>
 
-                    {/* Payment methods */}
-                    <div className="bg-white rounded-lg border border-slate-200 p-5">
-                      <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2">
-                        <CreditCard className="w-4 h-4 text-slate-400" /> Payment Methods
-                      </h3>
-                      <div className="space-y-3">
-                        {d.paymentMethods.map((pm) => (
-                          <div key={pm.id}>
-                            <HBar label={pm.name} value={pm.amount} max={d.paymentMethods[0]?.amount ?? 1} />
-                            <p className="text-[10px] text-slate-400 ml-[8.5rem] mt-0.5">{pm.count} transactions · {fmtPct(pm.pct)}</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    {/* Payment Methods card moved to the Purchasing tab */}
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -2164,7 +2137,7 @@ export default function SalesRevenue() {
                 { id: 'today', label: 'Today' },
                 { id: '7d', label: '7d' },
                 { id: '30d', label: '30d' },
-                { id: 'monthly', label: 'This month' },
+                { id: 'monthly', label: 'Month to date' },
                 { id: 'ytd', label: 'YTD' },
                 { id: 'custom', label: 'Custom' },
               ] as Array<{ id: StaffPeriod; label: string }>).map((p) => (
@@ -2219,14 +2192,21 @@ export default function SalesRevenue() {
                   ? `${d.fromDate} – ${d.toDate}`
                   : '';
 
-              // Becky's commission — 4% of her total sales for the selected period.
-              // Match by name (case-insensitive, accepts "Becky" or starts with "becky").
+              // Becky's commission — 4% of her total sales for the selected
+              // period. The `amount` field is whatever date window the period
+              // selector requested. We deliberately do NOT fall back to the
+              // legacy `ytdAmount` field — if the period returns no rows for
+              // Becky we want $0, not a stale YTD number.
               const beckyRow = d.staff.find((s) =>
                 (s.name ?? '').toLowerCase().includes('becky') ||
                 (s.rawName ?? '').toLowerCase().includes('becky')
               );
-              const beckyAmount = beckyRow ? (beckyRow.amount ?? beckyRow.ytdAmount ?? 0) : 0;
+              const beckyAmount = beckyRow?.amount ?? 0;
               const beckyCommission = beckyAmount * 0.04;
+              const dateRangeText =
+                d.fromDate && d.toDate
+                  ? `${d.fromDate} → ${d.toDate}`
+                  : '';
 
               return (
                 <>
@@ -2238,7 +2218,12 @@ export default function SalesRevenue() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide">Becky Commission ({periodLabel})</p>
-                        <p className="text-[10px] text-emerald-600 mt-0.5">4% of {fmt(beckyAmount)} total sales · paid end of month</p>
+                        <p className="text-[10px] text-emerald-600 mt-0.5">
+                          4% of {fmt(beckyAmount)} sales · paid end of month
+                          {dateRangeText && (
+                            <span className="text-emerald-500/70"> · {dateRangeText}</span>
+                          )}
+                        </p>
                       </div>
                       <p className="text-3xl font-bold text-emerald-700 flex-shrink-0">{fmt(beckyCommission)}</p>
                     </div>
@@ -2510,10 +2495,13 @@ export default function SalesRevenue() {
           );
         })()}
 
-        {/* ── PURCHASING TAB ── */}
-        {tab === 'purchasing' && (
+        {/* ── PURCHASING / VENDORS TAB ──
+            Both tabs share the same purchasingQ data fetch + IIFE. The
+            Vendors tab shows ONLY the Vendor Directory; Purchasing shows
+            everything else. The internal `showVendors` flag drives the
+            split inside the IIFE below. */}
+        {(tab === 'purchasing' || tab === 'vendors') && (
           <div className="space-y-6">
-            <VendorHealthCard />
             {purchasingQ.isLoading && <LoadingState label="Loading purchasing data…" />}
             {purchasingQ.isError && <ErrorState error={purchasingQ.error} />}
             {purchasingQ.data?.notReady && (
@@ -2523,15 +2511,62 @@ export default function SalesRevenue() {
             )}
             {purchasingQ.data && !purchasingQ.data.notReady && (() => {
               const d = purchasingQ.data;
+              const showVendors = tab === 'vendors';
+              const showPurchasing = tab === 'purchasing';
               return (
                 <>
+                  {/* Open orders — top of Purchasing tab */}
+                  {showPurchasing && d.orders.length > 0 && (
+                    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                      <div className="px-5 py-3 border-b border-slate-100">
+                        <h3 className="text-sm font-semibold text-slate-900">Open / Pending Orders</h3>
+                        <p className="text-xs text-slate-500 mt-0.5">Last synced {relativeTime(d.cachedAt)} · click any row to view line items</p>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-slate-100 bg-slate-50">
+                              <th className="text-left px-4 py-2 text-slate-500 font-medium w-8"></th>
+                              <th className="text-left px-4 py-2 text-slate-500 font-medium">PO #</th>
+                              <th className="text-left px-4 py-2 text-slate-500 font-medium">Vendor</th>
+                              <th className="text-left px-4 py-2 text-slate-500 font-medium">Status</th>
+                              <th className="text-left px-4 py-2 text-slate-500 font-medium">Created</th>
+                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Days Open</th>
+                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Qty Ordered</th>
+                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Qty Open</th>
+                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Cost</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-50">
+                            {[...d.orders]
+                              .sort((a, b) => {
+                                // Newest first by created_at; rows with no
+                                // date sink to the bottom.
+                                const at = a.created_at ? new Date(a.created_at).getTime() : 0;
+                                const bt = b.created_at ? new Date(b.created_at).getTime() : 0;
+                                return bt - at;
+                              })
+                              .slice(0, 50)
+                              .map((o) => (
+                                <OrderRow key={o.id} order={o} />
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Vendor / Order stat cards — Vendors tab only */}
+                  {showVendors && (
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <StatCard label="Vendors" value={d.vendorCount.toLocaleString()} sub="active suppliers" icon={ShoppingBag} color="blue" />
                     <StatCard label="Total Orders" value={d.totalOrders.toLocaleString()} sub="all time" icon={Package} color="green" />
                     <StatCard label="Open Orders" value={d.openOrderCount.toLocaleString()} sub="pending or open" icon={TrendingUp} color="amber" />
                   </div>
+                  )}
 
-                  {/* ── Payment Processor ── */}
+                  {/* ── Payment Processor — Purchasing only ── */}
+                  {showPurchasing && (
                   <div className="bg-white rounded-lg border border-slate-200 p-5">
                     <h3 className="text-sm font-semibold text-slate-900 mb-3">Payment Processor</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2554,8 +2589,32 @@ export default function SalesRevenue() {
                       </div>
                     </div>
                   </div>
+                  )}
 
-                  {/* Vendor directory with contact info */}
+                  {/* ── Payment Methods (analytics-driven) — Purchasing only ── */}
+                  {showPurchasing && analyticsQ.data && analyticsQ.data.paymentMethods.length > 0 && (
+                    <div className="bg-white rounded-lg border border-slate-200 p-5">
+                      <h3 className="text-sm font-semibold text-slate-900 mb-1 flex items-center gap-2">
+                        <CreditCard className="w-4 h-4 text-slate-400" /> Payment Methods
+                      </h3>
+                      <p className="text-xs text-slate-500 mb-4">
+                        Last {analyticsDays} days · sales by payment type
+                      </p>
+                      <div className="space-y-3">
+                        {analyticsQ.data.paymentMethods.map((pm) => (
+                          <div key={pm.id}>
+                            <HBar label={pm.name} value={pm.amount} max={analyticsQ.data!.paymentMethods[0]?.amount ?? 1} />
+                            <p className="text-[10px] text-slate-400 ml-[8.5rem] mt-0.5">{pm.count} transactions · {fmtPct(pm.pct)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Open orders — moved to top of Purchasing tab */}
+
+                  {/* Vendor directory with contact info — Vendors tab only */}
+                  {showVendors && (
                   <div className="bg-white rounded-lg border border-slate-200 p-5">
                     <h3 className="text-sm font-semibold text-slate-900 mb-1">Vendor Directory ({d.vendorCount - 1})</h3>
                     <p className="text-xs text-slate-500 mb-4">
@@ -2850,54 +2909,13 @@ export default function SalesRevenue() {
                       })()}
                     </div>
                   </div>
-
-                  {/* Open orders */}
-                  {d.orders.length > 0 && (
-                    <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-                      <div className="px-5 py-3 border-b border-slate-100">
-                        <h3 className="text-sm font-semibold text-slate-900">Open / Pending Orders</h3>
-                        <p className="text-xs text-slate-500 mt-0.5">Last synced {relativeTime(d.cachedAt)}</p>
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs">
-                          <thead>
-                            <tr className="border-b border-slate-100 bg-slate-50">
-                              <th className="text-left px-4 py-2 text-slate-500 font-medium">PO #</th>
-                              <th className="text-left px-4 py-2 text-slate-500 font-medium">Vendor</th>
-                              <th className="text-left px-4 py-2 text-slate-500 font-medium">Status</th>
-                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Qty Ordered</th>
-                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Qty Open</th>
-                              <th className="text-right px-4 py-2 text-slate-500 font-medium">Cost</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-50">
-                            {d.orders.slice(0, 50).map((o) => (
-                              <tr key={o.id} className="hover:bg-slate-50">
-                                <td className="px-4 py-2 font-mono text-slate-600">
-                                  <span className="flex items-center gap-1.5">
-                                    {o.public_id ?? o.id}
-                                    <CopyPoButton po={String(o.public_id ?? o.id)} />
-                                  </span>
-                                </td>
-                                <td className="px-4 py-2 text-slate-700 max-w-[150px] truncate">{o.vendorName}</td>
-                                <td className="px-4 py-2">
-                                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${o.status === 'open' ? 'bg-blue-100 text-blue-700' : 'bg-amber-100 text-amber-700'}`}>
-                                    {o.status}
-                                  </span>
-                                </td>
-                                <td className="px-4 py-2 text-right text-slate-600">{o.total_qty?.toFixed(0) ?? '—'}</td>
-                                <td className="px-4 py-2 text-right text-slate-600">{o.total_open_qty?.toFixed(0) ?? '—'}</td>
-                                <td className="px-4 py-2 text-right font-mono text-slate-700">{o.total_cost != null ? fmt(o.total_cost) : '—'}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
                   )}
+
+                  {/* Open orders — moved to top of Purchasing tab; this slot intentionally empty */}
                 </>
               );
             })()}
+            {tab === 'purchasing' && <VendorHealthCard />}
           </div>
         )}
 

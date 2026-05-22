@@ -247,6 +247,57 @@ export async function cacheVendorActivity(
   };
 }
 
+/**
+ * Resolve message IDs to thread IDs from the cache.
+ *
+ * Gmail's deep-link URL (`#inbox/<id>` / `#all/<id>`) expects a threadId,
+ * not the API messageId. The two are different. This helper looks up each
+ * id in the cache and returns the matching threadId where available.
+ *
+ * Falls back to the messageId itself for any id we don't have cached, so
+ * the URL still attempts a best-effort match instead of dropping.
+ */
+export async function resolveThreadIds(
+  messageIds: string[]
+): Promise<Record<string, string>> {
+  if (!messageIds || messageIds.length === 0) return {};
+  const out: Record<string, string> = {};
+
+  // Query the canonical prefix and filter client-side. The cache has
+  // O(1500) rows max so this is fine; there's no GSI on `id`.
+  // Optimization: parallel scans by date prefix would be faster but the
+  // analysis path is already async background-running, so simple wins.
+  await Promise.all(
+    messageIds.map(async (id) => {
+      try {
+        const res = await docClient.send(
+          new QueryCommand({
+            TableName: TABLE_NAME,
+            KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
+            FilterExpression: '#i = :i',
+            ExpressionAttributeNames: { '#i': 'id' },
+            ExpressionAttributeValues: {
+              ':u': OWNER_USER_ID,
+              ':p': 'GMAIL#MSG#',
+              ':i': id,
+            },
+            ProjectionExpression: 'threadId, #i',
+          })
+        );
+        const found = (res.Items ?? []).find((it) => it['id'] === id);
+        if (found && found['threadId']) {
+          out[id] = String(found['threadId']);
+        } else {
+          out[id] = id; // fallback: messageId itself
+        }
+      } catch {
+        out[id] = id;
+      }
+    })
+  );
+  return out;
+}
+
 /** Coverage stats so the UI can show "X messages cached, oldest from Y". */
 export async function cacheStats(): Promise<{
   totalCanonical: number;

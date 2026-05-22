@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -15,9 +15,11 @@ import {
   Clock,
   Database,
   CloudDownload,
+  ExternalLink,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
+import { gmailMessageUrl, gmailSearchUrl } from '../lib/gmailLinks';
 import CentralTimeBadge from '../components/CentralTimeBadge';
 import GmailChat from '../components/GmailChat';
 
@@ -31,6 +33,8 @@ interface GmailEvent {
   contactEmail: string | null;
   summary: string;
   sourceMessageIds: string[];
+  /** Backend-resolved thread ids that match the messageIds 1:1. */
+  sourceThreadIds?: string[];
 }
 interface GmailVendor {
   name: string;
@@ -38,6 +42,7 @@ interface GmailVendor {
   topics: string[];
   actionItems?: string[];
   sourceMessageIds: string[];
+  sourceThreadIds?: string[];
 }
 interface GmailInvoice {
   vendor: string;
@@ -45,6 +50,7 @@ interface GmailInvoice {
   dueDate: string | null;
   summary: string;
   sourceMessageId: string;
+  sourceThreadId?: string;
 }
 interface GmailInquiry {
   from: string;
@@ -53,12 +59,14 @@ interface GmailInquiry {
   priority: 'high' | 'medium' | 'low';
   summary: string;
   sourceMessageId: string;
+  sourceThreadId?: string;
 }
 interface GmailFollowUp {
   title: string;
   why: string;
   suggestedAction: string;
   sourceMessageIds: string[];
+  sourceThreadIds?: string[];
 }
 interface AnalysisResponse {
   overview: string;
@@ -129,6 +137,43 @@ function EmptyState({ message }: { message: string }) {
   );
 }
 
+/**
+ * Inline list of Gmail deep links — used wherever the model returns
+ * `sourceMessageIds`. Renders as discreet chips so they don't dominate
+ * the section but are obvious as "open in Gmail" affordances.
+ */
+function MessageLinks({
+  ids,
+  label = 'Open in Gmail',
+}: {
+  ids: string[] | undefined;
+  label?: string;
+}) {
+  if (!ids || ids.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1.5">
+      {ids.slice(0, 6).map((id, i) => (
+        <a
+          key={id}
+          href={gmailMessageUrl(id)}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-[10px] text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-100 rounded px-1.5 py-0.5 transition"
+          title={`Open message ${id} in Gmail`}
+        >
+          <ExternalLink className="w-2.5 h-2.5" />
+          {ids.length === 1 ? label : `Msg ${i + 1}`}
+        </a>
+      ))}
+      {ids.length > 6 && (
+        <span className="text-[10px] text-slate-400 self-center">
+          +{ids.length - 6} more
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────
 
 interface CacheStats {
@@ -147,15 +192,43 @@ interface SyncResult {
   truncated: boolean;
 }
 
+type AnalysisStatus = 'ready' | 'running' | 'error' | 'none';
+
+// All AnalysisResponse fields are optional here because the cached row
+// may exist in a "running" or "error" state without yet having data.
+type AnalysisStateResponse = {
+  [K in keyof AnalysisResponse]?: AnalysisResponse[K];
+} & {
+  status?: AnalysisStatus;
+  runStartedAt?: string;
+  runEndedAt?: string;
+  lastError?: string | null;
+  message?: string;
+};
+
 export default function GmailAnalysis() {
   const [days, setDays] = useState<number>(14);
   const queryClient = useQueryClient();
 
-  const analysisQ = useQuery<AnalysisResponse>({
-    queryKey: ['gmail', 'analyze', days],
-    queryFn: () =>
-      api.post<AnalysisResponse>('/gmail/analyze', { days }).then((r) => r.data),
-    staleTime: 5 * 60 * 1000,
+  // GET /gmail/analyze — reads whatever's in the cache (ready, running, or error).
+  // Poll every 4 seconds while a run is in flight; otherwise idle.
+  const analysisQ = useQuery<AnalysisStateResponse>({
+    queryKey: ['gmail', 'analyze'],
+    queryFn: async () => {
+      try {
+        return (await api.get<AnalysisStateResponse>('/gmail/analyze')).data;
+      } catch (err: unknown) {
+        // 404 = no analysis cached yet
+        const status = (err as { response?: { status?: number } }).response?.status;
+        if (status === 404) return { status: 'none' };
+        throw err;
+      }
+    },
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      return d?.status === 'running' ? 4000 : false;
+    },
+    staleTime: 30 * 1000,
     retry: 1,
   });
 
@@ -166,10 +239,12 @@ export default function GmailAnalysis() {
     refetchInterval: 60 * 1000,
   });
 
-  const refreshMutation = useMutation({
-    mutationFn: () =>
+  // POST starts a background run. Server returns 202 with status: 'running'.
+  // The polling GET above will pick up the result when it lands.
+  const startRunMutation = useMutation({
+    mutationFn: (refresh: boolean) =>
       api
-        .post<AnalysisResponse>('/gmail/analyze', { days, refresh: true })
+        .post<AnalysisStateResponse>('/gmail/analyze', { days, refresh })
         .then((r) => r.data),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['gmail', 'analyze'] });
@@ -187,8 +262,32 @@ export default function GmailAnalysis() {
     },
   });
 
+  // Auto-kick a run if there's nothing cached, or if the cached result is for
+  // a different range than the user just selected. Only fires once per state.
+  const cachedRange = analysisQ.data?.rangeDays;
+  const status = analysisQ.data?.status ?? 'none';
+  const needsRun =
+    !analysisQ.isLoading &&
+    !analysisQ.isError &&
+    !startRunMutation.isPending &&
+    !startRunMutation.isError &&
+    status !== 'running' &&
+    (status === 'none' || (cachedRange !== undefined && cachedRange !== days));
+
+  // Auto-kick a run if there's nothing cached, or if the cached result is for
+  // a different range than the user just selected. useEffect (not a raw
+  // render-time call) avoids the infinite-loop hazard.
+  useEffect(() => {
+    if (needsRun) {
+      startRunMutation.mutate(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsRun]);
+
   const data = analysisQ.data;
-  const isLoading = analysisQ.isLoading || refreshMutation.isPending;
+  const isResultReady =
+    !!data && data.status !== 'running' && Array.isArray(data.events);
+  const isRunning = status === 'running' || startRunMutation.isPending;
 
   return (
     <div className="min-h-screen bg-brand-50">
@@ -311,38 +410,70 @@ export default function GmailAnalysis() {
             ))}
           </div>
           <button
-            onClick={() => refreshMutation.mutate()}
-            disabled={isLoading}
+            onClick={() => startRunMutation.mutate(true)}
+            disabled={isRunning}
             className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 transition-colors"
           >
-            {refreshMutation.isPending ? (
+            {isRunning ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
             ) : (
               <RefreshCw className="w-3.5 h-3.5" />
             )}
             Re-analyze
           </button>
-          {data && (
+          {data?.generatedAt && (
             <div className="flex items-center gap-1.5 text-xs text-slate-500 ml-auto">
               <Clock className="w-3.5 h-3.5" />
-              {data.fromCache ? 'Cached · ' : 'Fresh · '}
-              {formatDateTime(data.generatedAt)} · {data.totalMessagesScanned} msgs scanned
+              {isRunning ? 'Running · ' : 'Cached · '}
+              {formatDateTime(data.generatedAt)} · {data.totalMessagesScanned ?? 0} msgs scanned
             </div>
           )}
         </div>
 
-        {/* Loading */}
-        {isLoading && !data && (
+        {/* Running banner — shown while a fresh run is in flight */}
+        {isRunning && (
+          <div className="mb-4 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
+            <Loader2 className="w-4 h-4 text-rose-600 animate-spin flex-shrink-0" />
+            <div className="text-xs text-rose-800">
+              <span className="font-medium">Reading your inbox…</span>{' '}
+              {data?.events
+                ? 'Showing the previous result while the new one is generated.'
+                : 'First run takes ~30–90 seconds.'}
+            </div>
+          </div>
+        )}
+
+        {/* Loading state — only when we have no prior data to show */}
+        {isRunning && !isResultReady && (
           <div className="bg-white rounded-xl border border-slate-200 p-12 flex flex-col items-center justify-center">
             <Loader2 className="w-8 h-8 text-rose-600 animate-spin mb-3" />
             <p className="text-sm text-slate-600">Reading your inbox…</p>
             <p className="text-xs text-slate-400 mt-1">
-              First run takes ~30–60 seconds while the model reads your email.
+              The model reads cached email metadata and pulls bodies as needed.
             </p>
           </div>
         )}
 
-        {/* Error */}
+        {/* Error from a failed background run */}
+        {status === 'error' && !isRunning && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3 mb-4">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-red-900">Last analysis failed</p>
+              <p className="text-xs text-red-700 mt-1">
+                {data?.lastError ?? 'Unknown error.'}
+              </p>
+              <button
+                onClick={() => startRunMutation.mutate(true)}
+                className="text-xs text-red-700 underline mt-2 hover:text-red-900"
+              >
+                Try again
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Network error fetching the cache state */}
         {analysisQ.isError && !data && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -356,17 +487,25 @@ export default function GmailAnalysis() {
         )}
 
         {/* Results */}
-        {data && (
+        {(() => {
+          if (!data || !isResultReady) return null;
+          // We've established by isResultReady that the analysis arrays are populated.
+          const result = data as Required<Pick<
+            AnalysisResponse,
+            'overview' | 'events' | 'vendors' | 'invoices' | 'customerInquiries' |
+            'followUpsNeeded' | 'topSenders' | 'totalMessagesScanned' | 'generatedAt'
+          >>;
+          return (
           <div className="space-y-6">
             {/* Overview */}
             <section className="bg-white rounded-xl border border-slate-200 p-5">
               <SectionHeader
                 icon={TrendingUp}
                 title="Overview"
-                count={data.totalMessagesScanned}
+                count={result.totalMessagesScanned}
                 iconClass="bg-rose-100 text-rose-700"
               />
-              <p className="text-sm text-slate-700 leading-relaxed">{data.overview}</p>
+              <p className="text-sm text-slate-700 leading-relaxed">{result.overview}</p>
             </section>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -375,14 +514,14 @@ export default function GmailAnalysis() {
                 <SectionHeader
                   icon={Calendar}
                   title="Events & Invitations"
-                  count={data.events.length}
+                  count={result.events.length}
                   iconClass="bg-blue-100 text-blue-700"
                 />
-                {data.events.length === 0 ? (
+                {result.events.length === 0 ? (
                   <EmptyState message="No events or invitations in this window." />
                 ) : (
                   <ul className="space-y-3">
-                    {data.events.map((e, i) => (
+                    {result.events.map((e, i) => (
                       <li key={i} className="border-l-2 border-blue-200 pl-3">
                         <p className="text-sm font-medium text-slate-900">{e.title}</p>
                         <p className="text-xs text-slate-600 mt-0.5">{e.summary}</p>
@@ -392,6 +531,7 @@ export default function GmailAnalysis() {
                           {e.contactName && <span>👤 {e.contactName}</span>}
                           {e.contactEmail && <span>✉ {e.contactEmail}</span>}
                         </div>
+                        <MessageLinks ids={e.sourceThreadIds ?? e.sourceMessageIds} label="Open invite" />
                       </li>
                     ))}
                   </ul>
@@ -403,14 +543,14 @@ export default function GmailAnalysis() {
                 <SectionHeader
                   icon={Package}
                   title="Vendors"
-                  count={data.vendors.length}
+                  count={result.vendors.length}
                   iconClass="bg-emerald-100 text-emerald-700"
                 />
-                {data.vendors.length === 0 ? (
+                {result.vendors.length === 0 ? (
                   <EmptyState message="No vendor activity in this window." />
                 ) : (
                   <ul className="space-y-3">
-                    {data.vendors.map((v, i) => (
+                    {result.vendors.map((v, i) => (
                       <li key={i} className="border-l-2 border-emerald-200 pl-3">
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-sm font-medium text-slate-900">{v.name}</p>
@@ -439,6 +579,7 @@ export default function GmailAnalysis() {
                             ))}
                           </ul>
                         )}
+                        <MessageLinks ids={v.sourceThreadIds ?? v.sourceMessageIds} label="Open thread" />
                       </li>
                     ))}
                   </ul>
@@ -450,14 +591,14 @@ export default function GmailAnalysis() {
                 <SectionHeader
                   icon={Receipt}
                   title="Invoices & Bills"
-                  count={data.invoices.length}
+                  count={result.invoices.length}
                   iconClass="bg-amber-100 text-amber-700"
                 />
-                {data.invoices.length === 0 ? (
+                {result.invoices.length === 0 ? (
                   <EmptyState message="No invoices in this window." />
                 ) : (
                   <ul className="space-y-2">
-                    {data.invoices.map((inv, i) => (
+                    {result.invoices.map((inv, i) => (
                       <li
                         key={i}
                         className="flex items-start justify-between gap-3 py-2 border-b last:border-0 border-slate-100"
@@ -468,6 +609,16 @@ export default function GmailAnalysis() {
                           {inv.dueDate && (
                             <p className="text-[11px] text-amber-700 mt-1">Due: {inv.dueDate}</p>
                           )}
+                          <MessageLinks
+                            ids={
+                              inv.sourceThreadId
+                                ? [inv.sourceThreadId]
+                                : inv.sourceMessageId
+                                ? [inv.sourceMessageId]
+                                : undefined
+                            }
+                            label="Open invoice"
+                          />
                         </div>
                         {inv.amount != null && (
                           <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
@@ -485,31 +636,76 @@ export default function GmailAnalysis() {
                 <SectionHeader
                   icon={MessageSquare}
                   title="Customer Inquiries"
-                  count={data.customerInquiries.length}
+                  count={result.customerInquiries.length}
                   iconClass="bg-purple-100 text-purple-700"
                 />
-                {data.customerInquiries.length === 0 ? (
+                {result.customerInquiries.length === 0 ? (
                   <EmptyState message="No customer inquiries in this window." />
                 ) : (
                   <ul className="space-y-3">
-                    {data.customerInquiries.map((c, i) => (
-                      <li key={i} className="border-l-2 border-purple-200 pl-3">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-medium text-slate-900 truncate">
-                            {c.subject}
+                    {result.customerInquiries.map((c, i) => {
+                      const dateLabel = (() => {
+                        if (!c.date) return null;
+                        try {
+                          return new Date(c.date).toLocaleDateString('en-US', {
+                            timeZone: 'America/Chicago',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: 'numeric',
+                            minute: '2-digit',
+                          });
+                        } catch {
+                          return c.date;
+                        }
+                      })();
+                      const subject = (
+                        <span className="text-sm font-medium text-slate-900 truncate inline-flex items-center gap-1">
+                          {c.subject}
+                          {(c.sourceThreadId || c.sourceMessageId) && (
+                            <ExternalLink className="w-3 h-3 opacity-60" />
+                          )}
+                        </span>
+                      );
+                      return (
+                        <li key={i} className="border-l-2 border-purple-200 pl-3">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {(() => {
+                              const link = c.sourceThreadId ?? c.sourceMessageId;
+                              return link ? (
+                                <a
+                                  href={gmailMessageUrl(link)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="hover:text-purple-700 hover:underline truncate min-w-0"
+                                  title="Open in Gmail"
+                                >
+                                  {subject}
+                                </a>
+                              ) : (
+                                subject
+                              );
+                            })()}
+                            <span
+                              className={`text-[9px] px-1.5 py-0.5 rounded-full border ${priorityClass(
+                                c.priority
+                              )}`}
+                            >
+                              {c.priority}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            From: {c.from}
+                            {dateLabel && (
+                              <>
+                                {' · '}
+                                <span className="text-slate-400">{dateLabel}</span>
+                              </>
+                            )}
                           </p>
-                          <span
-                            className={`text-[9px] px-1.5 py-0.5 rounded-full border ${priorityClass(
-                              c.priority
-                            )}`}
-                          >
-                            {c.priority}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">From: {c.from}</p>
-                        <p className="text-xs text-slate-600 mt-1">{c.summary}</p>
-                      </li>
-                    ))}
+                          <p className="text-xs text-slate-600 mt-1">{c.summary}</p>
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </section>
@@ -520,25 +716,44 @@ export default function GmailAnalysis() {
               <SectionHeader
                 icon={ListTodo}
                 title="Follow-ups Needed"
-                count={data.followUpsNeeded.length}
+                count={result.followUpsNeeded.length}
                 iconClass="bg-rose-100 text-rose-700"
               />
-              {data.followUpsNeeded.length === 0 ? (
+              {result.followUpsNeeded.length === 0 ? (
                 <EmptyState message="Inbox is clear — no obvious follow-ups." />
               ) : (
                 <ul className="space-y-3">
-                  {data.followUpsNeeded.map((f, i) => (
-                    <li
-                      key={i}
-                      className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
-                    >
-                      <p className="text-sm font-medium text-slate-900">{f.title}</p>
-                      <p className="text-xs text-slate-600 mt-1">{f.why}</p>
-                      <p className="text-xs text-rose-700 mt-1.5 font-medium">
-                        → {f.suggestedAction}
-                      </p>
-                    </li>
-                  ))}
+                  {result.followUpsNeeded.map((f, i) => {
+                    const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
+                    const hasSingleId = linkIds.length === 1;
+                    return (
+                      <li
+                        key={i}
+                        className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
+                      >
+                        <p className="text-sm font-medium text-slate-900">{f.title}</p>
+                        <p className="text-xs text-slate-600 mt-1">{f.why}</p>
+                        {hasSingleId ? (
+                          <a
+                            href={gmailMessageUrl(linkIds[0]!)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-rose-700 mt-1.5 font-medium hover:text-rose-900 hover:underline"
+                          >
+                            → {f.suggestedAction}
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          <p className="text-xs text-rose-700 mt-1.5 font-medium">
+                            → {f.suggestedAction}
+                          </p>
+                        )}
+                        {!hasSingleId && (
+                          <MessageLinks ids={linkIds} label="Reply in Gmail" />
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </section>
@@ -548,27 +763,42 @@ export default function GmailAnalysis() {
               <SectionHeader
                 icon={Mail}
                 title="Top Senders"
-                count={data.topSenders.length}
+                count={result.topSenders.length}
                 iconClass="bg-slate-100 text-slate-700"
               />
-              {data.topSenders.length === 0 ? (
+              {result.topSenders.length === 0 ? (
                 <EmptyState message="No senders to summarize." />
               ) : (
                 <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5">
-                  {data.topSenders.map((s, i) => (
-                    <li
-                      key={i}
-                      className="flex items-center justify-between text-xs py-1 border-b last:border-0 border-slate-100"
-                    >
-                      <span className="text-slate-700 truncate">{s.from}</span>
-                      <span className="text-slate-500 font-medium ml-2">{s.count}</span>
-                    </li>
-                  ))}
+                  {result.topSenders.map((s, i) => {
+                    // Tavily-style: search the inbox for this sender, makes
+                    // it one click to see every email from them.
+                    const searchQuery = `from:${(s.from.match(/<([^>]+)>/) ?? [, s.from])[1]}`;
+                    return (
+                      <li
+                        key={i}
+                        className="flex items-center justify-between text-xs py-1 border-b last:border-0 border-slate-100"
+                      >
+                        <a
+                          href={gmailSearchUrl(searchQuery)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-700 hover:text-rose-700 hover:underline truncate flex items-center gap-1"
+                          title={`Open all messages from this sender in Gmail`}
+                        >
+                          <span className="truncate">{s.from}</span>
+                          <ExternalLink className="w-2.5 h-2.5 flex-shrink-0 opacity-60" />
+                        </a>
+                        <span className="text-slate-500 font-medium ml-2">{s.count}</span>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </section>
           </div>
-        )}
+          );
+        })()}
       </main>
 
       {/* Floating chatbot */}

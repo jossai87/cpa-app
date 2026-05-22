@@ -37,14 +37,22 @@ import {
   BatchWriteCommand,
   GetCommand,
   PutCommand,
+  QueryCommand,
 } from '@aws-sdk/lib-dynamodb';
+import {
+  SQSClient,
+  SendMessageBatchCommand,
+  type SendMessageBatchRequestEntry,
+} from '@aws-sdk/client-sqs';
 import { searchEmails, getMessage } from '../gmail/client';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
+const sqsClient = new SQSClient({ region: 'us-east-1' });
 
 const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
+const EMBED_QUEUE_URL = process.env['EMBED_QUEUE_URL'] ?? '';
 const STATE_SK = 'GMAIL#SYNC#STATE';
 const BODY_CAP_BYTES = 6 * 1024; // 6 KB cap on bodyText
 const TTL_DAYS = 365;
@@ -127,6 +135,19 @@ function extractEmailDomain(fromHeader: string): string | null {
   return at >= 0 ? email.slice(at + 1).toLowerCase() : null;
 }
 
+function extractEmailLocal(fromHeader: string): string | null {
+  const m = fromHeader.match(/<([^>]+)>/) ?? fromHeader.match(/([\w.+-]+@[\w.-]+)/);
+  if (!m) return null;
+  const email = (m[1] ?? '').trim().toLowerCase();
+  const at = email.indexOf('@');
+  return at >= 0 ? email.slice(0, at) : null;
+}
+
+function extractDisplayName(fromHeader: string): string | null {
+  const m = fromHeader.match(/^"?([^"<]+?)"?\s*</);
+  return m ? m[1].trim() : null;
+}
+
 const OWNER_EMAIL_DOMAIN = 'footsolutions.com';
 
 function isVendorDomain(domain: string | null): boolean {
@@ -140,10 +161,12 @@ function classifyKind(args: {
   subject: string;
   body: string;
   vendorBrand: string | null;
-}): 'invoice' | 'vendor' | 'customer' | 'internal' | null {
+}): 'invoice' | 'vendor' | 'customer' | 'corporate' | 'franchise' | 'internal' | null {
   const subj = args.subject.toLowerCase();
   const body = args.body.toLowerCase();
   const fromDomain = extractEmailDomain(args.fromHeader);
+  const fromLocal = extractEmailLocal(args.fromHeader);
+  const fromDisplay = extractDisplayName(args.fromHeader);
   const isFromOwner = fromDomain === OWNER_EMAIL_DOMAIN;
   const isFromVendor = isVendorDomain(fromDomain) || args.vendorBrand !== null;
 
@@ -152,11 +175,35 @@ function classifyKind(args: {
     /\binvoice\b|\bamount due\b|\bpayment due\b|\bbalance due\b|\binvoice #|\bremittance\b|\bpayment reminder\b/;
   if (invoiceRe.test(subj) || invoiceRe.test(body)) return 'invoice';
 
+  // Foot Solutions corporate / network classification
+  // ────────────────────────────────────────────────
+  // The store domain is footsolutions.com. Mail from this domain splits into:
+  //   1. flowermound@        → 'internal' (your own store)
+  //   2. <city>@             → 'franchise' (sister store)
+  //   3. <person>@ or named  → 'corporate' (HQ leadership / ops / marketing)
+  //
+  // Outside footsolutions.com but with display names like
+  // "Foot Solutions Franchise Group LLC" or "Foot Solutions Mail Service" =
+  // HQ-affiliated systems (QuickBooks/Voxelcare). Classify those 'corporate'.
+  if (isFromOwner) {
+    if (fromLocal === 'flowermound') return 'internal';
+    if (fromLocal && /^[a-z]+(staff)?$/.test(fromLocal)) return 'franchise';
+    return 'corporate';
+  }
+  if (fromDisplay && /foot\s*solutions\s+(?:franchise|mail\s*service)/i.test(fromDisplay)) {
+    return 'corporate';
+  }
+  if (
+    fromDisplay &&
+    /^foot\s*solutions(\s+\S+)?$/i.test(fromDisplay.trim()) &&
+    fromDomain !== OWNER_EMAIL_DOMAIN
+  ) {
+    // "Foot Solutions <City> via Otter.ai" / "via Read AI" = sister-store recordings
+    if (/via\s+(otter|read)/i.test(fromDisplay)) return 'franchise';
+  }
+
   // Vendor: from a known vendor domain or mentions a brand
   if (isFromVendor) return 'vendor';
-
-  // Internal: from the store's own domain
-  if (isFromOwner) return 'internal';
 
   // Customer: short, personal, mentions appointments / fitting / questions
   const customerRe =
@@ -216,7 +263,7 @@ interface CachedMessage {
   bodyText: string;
   bodyTruncated: boolean;
   vendorBrand: string | null;
-  kind: 'invoice' | 'vendor' | 'customer' | 'internal' | null;
+  kind: 'invoice' | 'vendor' | 'customer' | 'corporate' | 'franchise' | 'internal' | null;
   hasAttachment: boolean;
   ttl: number;
 }
@@ -303,6 +350,44 @@ async function writeMessage(msg: CachedMessage): Promise<void> {
     }
     if (unprocessed.length > 0) {
       console.warn(`Failed to write ${unprocessed.length} items for msg ${msg.id}`);
+    }
+  }
+
+  // Best-effort: enqueue an embed job. Failure here doesn't block the
+  // canonical write — the SQS DLQ catches real failures, and the
+  // backfillEmbeddings mode can replay any missed messages.
+  if (EMBED_QUEUE_URL) {
+    try {
+      await enqueueEmbedJobs([{ messageId: msg.id, dateOnly: msg.dateOnly }]);
+    } catch (err) {
+      console.warn(`enqueue embed job failed for ${msg.id}: ${(err as Error).message}`);
+    }
+  }
+}
+
+// ── SQS enqueue helper ───────────────────────────────────────────────
+
+interface EmbedJob {
+  messageId: string;
+  dateOnly: string;
+}
+
+async function enqueueEmbedJobs(jobs: EmbedJob[]): Promise<void> {
+  if (!EMBED_QUEUE_URL || jobs.length === 0) return;
+  // SQS SendMessageBatch caps at 10 entries per call.
+  for (let i = 0; i < jobs.length; i += 10) {
+    const slice = jobs.slice(i, i + 10);
+    const entries: SendMessageBatchRequestEntry[] = slice.map((j, idx) => ({
+      Id: String(i + idx),
+      MessageBody: JSON.stringify(j),
+    }));
+    const res = await sqsClient.send(
+      new SendMessageBatchCommand({ QueueUrl: EMBED_QUEUE_URL, Entries: entries })
+    );
+    if (res.Failed && res.Failed.length > 0) {
+      console.warn(
+        `enqueueEmbedJobs: ${res.Failed.length}/${slice.length} entries failed: ${JSON.stringify(res.Failed)}`
+      );
     }
   }
 }
@@ -526,10 +611,188 @@ async function rangeSync(after: string, before: string): Promise<SyncResult> {
   return result;
 }
 
+// ── Reclassify ───────────────────────────────────────────────────────
+//
+// Walk every canonical message in the cache and re-run the classifier on
+// its existing fields. Useful when the classifier logic changes (e.g.
+// adding new `kind` categories) — avoids re-fetching from Gmail.
+async function reclassify(): Promise<SyncResult> {
+  const t0 = Date.now();
+  let scanned = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+
+  while (true) {
+    const res = await docClient.send(
+      new (await import('@aws-sdk/lib-dynamodb')).QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':u': OWNER_USER_ID, ':p': 'GMAIL#MSG#' },
+        ExclusiveStartKey: exclusiveStartKey,
+      })
+    );
+    for (const item of (res.Items ?? []) as Record<string, unknown>[]) {
+      scanned++;
+      const fromHeader = String(item['from'] ?? '');
+      const subject = String(item['subject'] ?? '');
+      const snippet = String(item['snippet'] ?? '');
+      const body = String(item['bodyText'] ?? '');
+      const headerForBrand = `${fromHeader} ${subject} ${snippet}`;
+      const newVendor = detectVendorBrand(headerForBrand);
+      const newKind = classifyKind({
+        fromHeader,
+        toHeader: String(item['to'] ?? ''),
+        subject,
+        body,
+        vendorBrand: newVendor,
+      });
+      const oldKind = (item['kind'] as string | null) ?? null;
+      const oldVendor = (item['vendorBrand'] as string | null) ?? null;
+      if (oldKind === newKind && oldVendor === newVendor) {
+        unchanged++;
+        continue;
+      }
+
+      // Rebuild the canonical row + pointer rows with the new kind/vendor.
+      // We read the full body back into the cache write helper.
+      const cached: CachedMessage = {
+        id: String(item['id']),
+        threadId: String(item['threadId']),
+        date: String(item['date']),
+        dateOnly: String(item['dateOnly']),
+        from: fromHeader,
+        to: String(item['to'] ?? ''),
+        subject,
+        snippet,
+        bodyText: body,
+        bodyTruncated: !!item['bodyTruncated'],
+        vendorBrand: newVendor,
+        kind: newKind,
+        hasAttachment: !!item['hasAttachment'],
+        ttl: Number(item['ttl']) || ttlEpochSecs(String(item['date'])),
+      };
+
+      // Best-effort: delete old pointer rows that no longer apply, then write
+      // fresh ones via writeMessage(). DDB BatchWrite supports DeleteRequest.
+      const { BatchWriteCommand: BWC } = await import('@aws-sdk/lib-dynamodb');
+      const deletes: Array<{ DeleteRequest: { Key: Record<string, string> } }> = [];
+      if (oldVendor && oldVendor !== newVendor) {
+        deletes.push({
+          DeleteRequest: {
+            Key: {
+              userId: OWNER_USER_ID,
+              sk: `GMAIL#VENDOR#${sanitizeBrand(oldVendor)}#${cached.dateOnly}#${cached.id}`,
+            },
+          },
+        });
+      }
+      if (oldKind && oldKind !== newKind) {
+        deletes.push({
+          DeleteRequest: {
+            Key: {
+              userId: OWNER_USER_ID,
+              sk: `GMAIL#KIND#${oldKind}#${cached.dateOnly}#${cached.id}`,
+            },
+          },
+        });
+      }
+      if (deletes.length > 0) {
+        await docClient.send(new BWC({ RequestItems: { [TABLE_NAME]: deletes } }));
+      }
+
+      await writeMessage(cached);
+      updated++;
+    }
+    if (!res.LastEvaluatedKey) break;
+    exclusiveStartKey = res.LastEvaluatedKey;
+  }
+
+  await saveState({
+    message: `Reclassified ${updated} of ${scanned} messages (${unchanged} unchanged).`,
+  });
+
+  return {
+    mode: 'reclassify',
+    query: '(local reclassify)',
+    messagesSeen: scanned,
+    messagesWritten: updated,
+    messagesSkipped: unchanged,
+    durationMs: Date.now() - t0,
+    truncated: false,
+  };
+}
+
+// ── Embedding backfill mode ──────────────────────────────────────────
+//
+// Scans every canonical Gmail message row and enqueues an embed job for
+// each. Idempotent: the embed Lambda overwrites by key. Use after first
+// deploy of the S3 Vectors stack to seed the index from existing cache.
+
+async function backfillEmbeddings(): Promise<SyncResult> {
+  const t0 = Date.now();
+  if (!EMBED_QUEUE_URL) {
+    return {
+      mode: 'backfillEmbeddings',
+      query: '(none)',
+      messagesSeen: 0,
+      messagesWritten: 0,
+      messagesSkipped: 0,
+      durationMs: Date.now() - t0,
+      truncated: false,
+    };
+  }
+
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  let scanned = 0;
+  let enqueued = 0;
+  const buffer: EmbedJob[] = [];
+
+  while (true) {
+    const res = await docClient.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
+        ExpressionAttributeValues: { ':u': OWNER_USER_ID, ':p': 'GMAIL#MSG#' },
+        ProjectionExpression: '#id, dateOnly',
+        ExpressionAttributeNames: { '#id': 'id' },
+        ExclusiveStartKey: exclusiveStartKey,
+      })
+    );
+    for (const item of res.Items ?? []) {
+      const messageId = String(item['id'] ?? '');
+      const dateOnly = String(item['dateOnly'] ?? '');
+      if (!messageId || !dateOnly) continue;
+      buffer.push({ messageId, dateOnly });
+      scanned++;
+      if (buffer.length >= 10) {
+        await enqueueEmbedJobs(buffer.splice(0, buffer.length));
+        enqueued = scanned;
+      }
+    }
+    if (!res.LastEvaluatedKey) break;
+    exclusiveStartKey = res.LastEvaluatedKey;
+  }
+  if (buffer.length > 0) {
+    await enqueueEmbedJobs(buffer);
+    enqueued = scanned;
+  }
+
+  return {
+    mode: 'backfillEmbeddings',
+    query: '(scan canonical rows)',
+    messagesSeen: scanned,
+    messagesWritten: enqueued,
+    messagesSkipped: 0,
+    durationMs: Date.now() - t0,
+    truncated: false,
+  };
+}
+
 // ── Lambda entry — supports both EventBridge and API Gateway events ──
 
 interface EventBridgeInvoke {
-  mode?: 'backfill' | 'incremental' | 'range';
+  mode?: 'backfill' | 'incremental' | 'range' | 'reclassify' | 'backfillEmbeddings';
   months?: number;
   after?: string;
   before?: string;
@@ -545,7 +808,7 @@ export const handler = async (
     'routeKey' in event &&
     typeof (event as APIGatewayProxyEventV2WithJWTAuthorizer).routeKey === 'string';
 
-  let mode: 'backfill' | 'incremental' | 'range' = 'incremental';
+  let mode: 'backfill' | 'incremental' | 'range' | 'reclassify' | 'backfillEmbeddings' = 'incremental';
   let months = 6;
   let after: string | undefined;
   let before: string | undefined;
@@ -580,6 +843,10 @@ export const handler = async (
         return isApiEvent ? json(400, err) : (err as unknown as SyncResult);
       }
       result = await rangeSync(after, before);
+    } else if (mode === 'reclassify') {
+      result = await reclassify();
+    } else if (mode === 'backfillEmbeddings') {
+      result = await backfillEmbeddings();
     } else {
       result = await incremental();
     }

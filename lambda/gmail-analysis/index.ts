@@ -22,6 +22,7 @@ import {
   GetCommand,
   PutCommand,
 } from '@aws-sdk/lib-dynamodb';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import {
   BedrockRuntimeClient,
   ConverseCommand,
@@ -35,12 +36,18 @@ import {
   cacheRead,
   cacheVendorActivity,
   cacheStats,
+  resolveThreadIds,
   type CachedQueryArgs,
 } from './cache';
+import { tavilySearch } from '../shared/tavily';
+import { kbSemanticSearch as vectorKbSearch } from '../shared/vectorIndex';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const bedrockClient = new BedrockRuntimeClient({ region: 'us-east-1' });
+const lambdaClient = new LambdaClient({ region: 'us-east-1' });
+
+const SELF_FUNCTION_NAME = process.env['AWS_LAMBDA_FUNCTION_NAME'] ?? 'foot-solutions-gmail-analysis';
 
 const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
@@ -446,6 +453,29 @@ const CHAT_TOOLS: Tool[] = [
   },
   {
     toolSpec: {
+      name: 'kb_semantic_search',
+      description:
+        "Semantic search over the full text of cached Gmail messages (Cohere embeddings + S3 Vectors). Use when the question is conceptual or fuzzy ('emails about pricing concerns', 'anything mentioning a delayed delivery', 'complaints about fit') and exact-match cache_query (vendor / from / text) won't find it. Returns up to top_k message metadata + a body preview, ranked by similarity. Follow up with cache_read for full bodies.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Natural-language search query.',
+            },
+            top_k: {
+              type: 'number',
+              description: 'Default 8, max 25.',
+            },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
       name: 'live_search_inbox',
       description:
         "Fallback: search the LIVE Gmail inbox using Gmail query syntax. Use ONLY when the cache_stats coverage doesn't cover the date range you need (i.e. older than the cache, or freshly arrived in the last hour). Slower and rate-limited compared to cache_query.",
@@ -610,10 +640,11 @@ function buildAnalyzeSystemPrompt(days: number, totalScanned: number): string {
 
 Your job: read the last ${days} days of inbox metadata (and dig deeper with tools when needed) and produce a structured analysis the owner can scan in under 60 seconds.
 
-You have ${totalScanned} message snippets in the seed below — they come from the LOCAL CACHE (a rolling ~6 month copy of the inbox). You can call:
+You have ${totalScanned} message snippets in the seed below — they come from the LOCAL CACHE (a rolling ~6 month copy of the inbox). Available tools:
 - cache_read(id, dateOnly) — fetch the full body of any cached thread
 - cache_query({ vendor, kind, since, until, from, text }) — re-query the cache with different filters
 - live_search_inbox / live_read_email — fallbacks for messages not yet in the cache
+- submit_analysis(...) — submit your final structured result
 
 Categories the owner cares about most:
 - Events: trade shows, demos, training, networking, in-person invitations
@@ -623,15 +654,27 @@ Categories the owner cares about most:
 - Follow-ups the owner owes to someone (unanswered threads where the ball is in their court)
 - Top senders by message count
 
-Hard rules:
+CRITICAL workflow rules — follow exactly:
+1. The seed already gives you enough to draft top_senders, group vendors, and identify candidate items.
+2. You may call cache_read at most 6 times to fill in details for the most important threads (top invoices, top vendor threads, ambiguous customer messages). DO NOT exceed 6 cache_read calls.
+3. You may call cache_query at most 2 times for narrow follow-ups. DO NOT exceed 2 cache_query calls.
+4. You MUST call submit_analysis as your final action. Failure to call submit_analysis means the owner sees nothing.
+5. If you are uncertain about a detail, leave the field null/empty rather than calling more tools — the owner prefers a partial answer over a missing one.
+6. Hard rule: by your 8th total tool call, submit_analysis MUST be the next call.
+
+CRITICAL — message IDs (do not get this wrong):
+- Every sourceMessageIds / sourceMessageId you return MUST be an EXACT string copied from the seed (e.g. "19e4c8a0798d5a47") or from a cache_query / cache_read result's id field.
+- DO NOT invent IDs like "seed-brooks-rep-01" or "msg-1". DO NOT slugify subjects into IDs.
+- DO NOT abbreviate or shorten the hex IDs.
+- If you cannot find an actual ID for a section item, leave the array empty rather than fabricate.
+
+Other rules:
 - Never invent details. If you cannot determine an event date, set it to null.
-- Read the actual email body when assigning amounts, dates, or contact names. Snippets alone are not enough.
 - Cap each list to the most useful 8-10 items. Skip noise.
 - Group vendor activity by brand — one entry per vendor with messageCount, not one per email.
 - For follow-ups, only include threads where the owner clearly owes a reply or action.
-- When you are done, call submit_analysis with the structured result. Do this exactly once.
 
-Begin by reviewing the seed. Use cache_read sparingly — at most 8-10 calls, prioritizing invoices, vendor threads, and ambiguous customer messages.`;
+Begin by reviewing the seed. Be efficient. Submit early.`;
 }
 
 async function runAnalyze(days: number): Promise<CachedAnalysis> {
@@ -659,8 +702,9 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
     },
   ];
 
-  const MAX_ROUNDS = 12;
+  const MAX_ROUNDS = 20;
   let analysis: GmailAnalysis | null = null;
+  let lastTextResponse: string | null = null;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     const response = await bedrockClient.send(
@@ -675,6 +719,13 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
 
     const assistantContent = response.output?.message?.content ?? [];
     messages.push({ role: 'assistant', content: assistantContent as ContentBlock[] });
+
+    // Capture the most recent text reply so we can fall back to it if the
+    // model never calls submit_analysis.
+    const textBlock = assistantContent.find((b) => 'text' in b);
+    if (textBlock && 'text' in textBlock && textBlock.text) {
+      lastTextResponse = textBlock.text;
+    }
 
     const stopReason = response.stopReason;
 
@@ -746,10 +797,73 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
     break;
   }
 
+  // If the model exited without calling submit_analysis (max rounds, or
+  // end_turn after exploring), give it ONE more chance with an explicit
+  // "you must submit now" instruction before degrading.
+  //
+  // Critical: the existing `messages` array may end on an assistant
+  // tool_use block without a matching tool_result (when the main loop
+  // breaks out at end_turn or hits a stop reason mid-flow). Anthropic
+  // strictly requires tool_use→tool_result pairing, so we rebuild the
+  // history from scratch and let the toolChoice constraint force the
+  // model to emit submit_analysis directly.
   if (!analysis) {
-    throw new Error(
-      'Model did not call submit_analysis — analysis incomplete. Try again.'
-    );
+    console.warn('Model did not call submit_analysis. Forcing final submission.');
+    const draftSummary = lastTextResponse
+      ? `\n\nThe model wrote this draft text but did not finalize: "${lastTextResponse.slice(0, 1500)}"`
+      : '';
+    const forceMessages: Message[] = [
+      {
+        role: 'user',
+        content: [
+          {
+            text: `Submit your final daily inbox analysis NOW for the last ${days} days of email. Use the cache_query tool data already implied by the seed below or provide your best inference. Use empty arrays for sections you cannot populate. Call submit_analysis exactly once.${draftSummary}\n\nSeed message count: ${seed.length}.`,
+          },
+        ],
+      },
+    ];
+    try {
+      const finalResponse = await bedrockClient.send(
+        new ConverseCommand({
+          modelId: MODEL_ID,
+          system: [{ text: buildAnalyzeSystemPrompt(days, seed.length) }],
+          messages: forceMessages,
+          toolConfig: {
+            tools: ANALYZE_TOOLS,
+            toolChoice: { tool: { name: 'submit_analysis' } },
+          },
+          inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+        })
+      );
+      const finalContent = finalResponse.output?.message?.content ?? [];
+      const submitBlock = finalContent.find(
+        (b) => 'toolUse' in b && b.toolUse?.name === 'submit_analysis'
+      );
+      if (submitBlock && 'toolUse' in submitBlock && submitBlock.toolUse) {
+        analysis = submitBlock.toolUse.input as unknown as GmailAnalysis;
+      }
+    } catch (err) {
+      console.warn(
+        'Force-submit retry failed:',
+        (err as Error).message
+      );
+    }
+  }
+
+  // Last-resort: synthesize a minimal analysis from whatever text the model
+  // produced. Better than 503-ing the page.
+  if (!analysis) {
+    analysis = {
+      overview:
+        lastTextResponse ??
+        'Analysis was inconclusive — the model could not finalize the report. Try Re-analyze, or ask the chatbot a specific question instead.',
+      events: [],
+      vendors: [],
+      invoices: [],
+      customerInquiries: [],
+      followUpsNeeded: [],
+      topSenders: [],
+    };
   }
 
   // Light validation + defaults
@@ -771,8 +885,76 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
     modelId: MODEL_ID,
   };
 
+  // Resolve every messageId the model returned into its threadId so the
+  // frontend can use Gmail's #all/<threadId> deep-link URL pattern (which
+  // actually works), instead of #inbox/<messageId> (which lands on Inbox).
+  await annotateAnalysisWithThreadIds(safe);
+
   await saveCachedAnalysis(safe);
   return safe;
+}
+
+/**
+ * Walk every section of the analysis and add a parallel `sourceThreadIds`
+ * (or `sourceThreadId`) populated from the cache. Modifies in place.
+ *
+ * Also defensively filters out any IDs that aren't valid Gmail message IDs
+ * (16-char lowercase hex), since the model occasionally hallucinates
+ * slugified placeholders like "seed-brooks-rep-01".
+ */
+function isLikelyGmailId(id: string): boolean {
+  // Gmail message + thread ids are 16-char lowercase hex, sometimes 17-19.
+  return /^[0-9a-f]{14,20}$/i.test(id.trim());
+}
+
+function sanitizeIds(ids: string[] | undefined): string[] {
+  if (!ids) return [];
+  return ids.filter(isLikelyGmailId);
+}
+
+async function annotateAnalysisWithThreadIds(safe: CachedAnalysis): Promise<void> {
+  // First pass: drop hallucinated IDs everywhere
+  for (const e of safe.events ?? []) e.sourceMessageIds = sanitizeIds(e.sourceMessageIds);
+  for (const v of safe.vendors ?? []) v.sourceMessageIds = sanitizeIds(v.sourceMessageIds);
+  for (const inv of safe.invoices ?? [])
+    if (inv.sourceMessageId && !isLikelyGmailId(inv.sourceMessageId)) inv.sourceMessageId = '';
+  for (const c of safe.customerInquiries ?? [])
+    if (c.sourceMessageId && !isLikelyGmailId(c.sourceMessageId)) c.sourceMessageId = '';
+  for (const f of safe.followUpsNeeded ?? []) f.sourceMessageIds = sanitizeIds(f.sourceMessageIds);
+
+  const allIds = new Set<string>();
+  for (const e of safe.events ?? []) for (const id of e.sourceMessageIds ?? []) allIds.add(id);
+  for (const v of safe.vendors ?? []) for (const id of v.sourceMessageIds ?? []) allIds.add(id);
+  for (const inv of safe.invoices ?? []) if (inv.sourceMessageId) allIds.add(inv.sourceMessageId);
+  for (const c of safe.customerInquiries ?? []) if (c.sourceMessageId) allIds.add(c.sourceMessageId);
+  for (const f of safe.followUpsNeeded ?? []) for (const id of f.sourceMessageIds ?? []) allIds.add(id);
+  if (allIds.size === 0) return;
+
+  const map = await resolveThreadIds([...allIds]);
+  for (const e of safe.events ?? []) {
+    (e as { sourceThreadIds?: string[] }).sourceThreadIds =
+      (e.sourceMessageIds ?? []).map((id) => map[id] ?? id);
+  }
+  for (const v of safe.vendors ?? []) {
+    (v as { sourceThreadIds?: string[] }).sourceThreadIds =
+      (v.sourceMessageIds ?? []).map((id) => map[id] ?? id);
+  }
+  for (const inv of safe.invoices ?? []) {
+    if (inv.sourceMessageId) {
+      (inv as { sourceThreadId?: string }).sourceThreadId =
+        map[inv.sourceMessageId] ?? inv.sourceMessageId;
+    }
+  }
+  for (const c of safe.customerInquiries ?? []) {
+    if (c.sourceMessageId) {
+      (c as { sourceThreadId?: string }).sourceThreadId =
+        map[c.sourceMessageId] ?? c.sourceMessageId;
+    }
+  }
+  for (const f of safe.followUpsNeeded ?? []) {
+    (f as { sourceThreadIds?: string[] }).sourceThreadIds =
+      (f.sourceMessageIds ?? []).map((id) => map[id] ?? id);
+  }
 }
 
 // ── Chat handler ─────────────────────────────────────────────────────
@@ -789,6 +971,12 @@ PREFER cache tools — they are faster and free:
   - cache_read(id, dateOnly?)              → full body of a cached message
   - cache_vendor_activity(vendor, days?)   → vendor rollup with last contact + top senders
   - cache_stats()                          → check coverage before searching
+  - kb_semantic_search(query, top_k?)      → semantic / fuzzy search over message bodies. Use this when the question is conceptual ("anyone complaining about fit", "emails about pricing concerns") and exact-match cache_query won't find it.
+
+Tool selection rule of thumb:
+  - Filter by vendor / sender / date / kind / known phrase  → cache_query
+  - Concept, theme, or paraphrased meaning                   → kb_semantic_search
+  - Quick coverage check                                     → cache_stats
 
 Use live tools ONLY if cache_stats shows the cache doesn't cover the range you need:
   - live_search_inbox(query, max?)
@@ -893,6 +1081,13 @@ async function runChat(rawMessages: ChatMessageInput[]): Promise<string> {
                 result = JSON.stringify(s);
                 break;
               }
+              case 'kb_semantic_search': {
+                const q = String(inp['query'] ?? '');
+                const topK = Math.min(Number(inp['top_k']) || 8, 25);
+                const hits = await vectorKbSearch(q, topK);
+                result = JSON.stringify({ query: q, count: hits.length, hits });
+                break;
+              }
               case 'live_search_inbox':
                 result = await execSearchInbox(inp);
                 break;
@@ -924,52 +1119,689 @@ async function runChat(rawMessages: ChatMessageInput[]): Promise<string> {
   return 'I was unable to complete the request. Please try again.';
 }
 
+// ── Daily Highlights ─────────────────────────────────────────────────
+//
+// A separate Bedrock pass (cheaper than full analyze) that produces a
+// 3-section daily highlight: vendors, HQ/franchise network, customers.
+// Uses cache + Tavily web search. Cached at sk=GMAIL#HIGHLIGHTS#LATEST
+// with the same async self-invoke pattern as analyze.
+
+const HIGHLIGHTS_SK = 'GMAIL#HIGHLIGHTS#LATEST';
+const HIGHLIGHTS_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+
+interface HighlightItem {
+  title: string;
+  detail: string;
+  whyItMatters?: string;
+  sourceMessageIds?: string[];
+  sourceUrls?: string[];
+}
+
+interface DailyHighlights {
+  generatedAt: string;
+  windowDays: number;
+  vendors: HighlightItem[];
+  network: { fromCorporate: HighlightItem[]; fromOtherStores: HighlightItem[] };
+  customers: HighlightItem[];
+  modelId: string;
+}
+
+interface CachedHighlights extends DailyHighlights {
+  status?: 'ready' | 'running' | 'error';
+  runStartedAt?: string;
+  runEndedAt?: string;
+  lastError?: string | null;
+}
+
+const HIGHLIGHTS_SUBMIT_SCHEMA = {
+  type: 'object',
+  properties: {
+    vendors: {
+      type: 'array',
+      description:
+        'Notable vendor activity in the window (new collections, backorders, co-op promos, rep visits, market shifts). 3-6 items max.',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          detail: { type: 'string' },
+          whyItMatters: { type: 'string' },
+          sourceMessageIds: { type: 'array', items: { type: 'string' } },
+          sourceUrls: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['title', 'detail'],
+      },
+    },
+    network: {
+      type: 'object',
+      properties: {
+        fromCorporate: {
+          type: 'array',
+          description:
+            'HQ communications: regional sales reports, monthly marketing minute, training calls, council voting, business plans, system maintenance, leadership announcements. 2-4 items.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              detail: { type: 'string' },
+              whyItMatters: { type: 'string' },
+              sourceMessageIds: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['title', 'detail'],
+          },
+        },
+        fromOtherStores: {
+          type: 'array',
+          description:
+            'Activity in shared/group threads from sister Foot Solutions stores. 2-4 items.',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string' },
+              detail: { type: 'string' },
+              whyItMatters: { type: 'string' },
+              sourceMessageIds: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['title', 'detail'],
+          },
+        },
+      },
+      required: ['fromCorporate', 'fromOtherStores'],
+    },
+    customers: {
+      type: 'array',
+      description:
+        'Inbound customer threads in the window: appointment requests, complaints, fitting questions, follow-ups owed. 3-6 items.',
+      items: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          detail: { type: 'string' },
+          whyItMatters: { type: 'string' },
+          sourceMessageIds: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['title', 'detail'],
+      },
+    },
+  },
+  required: ['vendors', 'network', 'customers'],
+} as const;
+
+const HIGHLIGHTS_TOOLS: Tool[] = [
+  {
+    toolSpec: {
+      name: 'cache_query',
+      description:
+        'Query the Gmail cache. Use kind=vendor / corporate / franchise / customer with since/until to scope to the window.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            vendor: { type: 'string' },
+            kind: {
+              type: 'string',
+              enum: ['invoice', 'vendor', 'customer', 'corporate', 'franchise', 'internal'],
+            },
+            since: { type: 'string' },
+            until: { type: 'string' },
+            from: { type: 'string' },
+            text: { type: 'string' },
+            limit: { type: 'number' },
+          },
+          required: [],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'cache_read',
+      description: 'Read full body of a cached email.',
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            dateOnly: { type: 'string' },
+          },
+          required: ['id'],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'web_search',
+      description:
+        "Tavily web search. Use SPARINGLY (max 3 calls per run) to enrich vendor highlights with recent industry news. Examples: 'Brooks Running Q2 2026 news', 'Hoka Bondi 9 launch'. Default topic=news, days=7.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            days: { type: 'number', description: 'Restrict to last N days (default 7).' },
+            maxResults: { type: 'number' },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
+  {
+    toolSpec: {
+      name: 'submit_highlights',
+      description:
+        'Submit your final highlights structure. Call this exactly once when finished.',
+      inputSchema: {
+        json: HIGHLIGHTS_SUBMIT_SCHEMA as unknown as Record<string, never>,
+      },
+    },
+  },
+];
+
+function buildHighlightsSystemPrompt(windowDays: number, today: string): string {
+  return `You are the Daily Highlights assistant for the new owner of Foot Solutions Flower Mound.
+Today's date (Central Time): ${today}
+Window: last ${windowDays} days.
+
+Your job: produce a TIGHT daily highlights digest with three sections — Vendors, Foot Solutions Network (HQ + sister stores), and Customers. The owner glances at this between fittings, so be concise.
+
+Tools:
+  - cache_query — your primary tool. The cache classifies messages as kind=vendor, corporate, franchise, customer, invoice, or internal.
+  - cache_read — fetch a body if you need actual content (prices, dates, contacts).
+  - web_search — Tavily news search. Use AT MOST 3 times, only for vendor news worth flagging (a brand launch, a market story, a relevant industry shift). Skip if nothing reaches that bar.
+  - submit_highlights — your FINAL action. Must be called exactly once.
+
+Hard rules:
+- Be specific. "Brooks rep emailed about Adrenaline GTS 24 backorder until 6/15" beats "Brooks had inventory updates."
+- Include sourceMessageIds for every email-derived item so the owner can click through. Include sourceUrls for any web-search-derived items.
+- CRITICAL: every sourceMessageIds string MUST be an EXACT id copied verbatim from a cache_query / cache_read result (16-char lowercase hex like "19e4c8a0798d5a47"). NEVER invent placeholder IDs like "msg-1" or "seed-brand-01". If you don't have a real id for an item, leave the array empty rather than fabricate.
+- whyItMatters is one short sentence on impact (revenue, deadline, customer experience). Skip if obvious.
+- If a section has no signal, return an empty array — do not pad.
+- Cap each list to 3-6 items. Quality > quantity.
+- HQ classification: corporate = leadership/ops/marketing at footsolutions.com (Taylor, John, Jordan, Don, Gary, Marek, etc.) and HQ-affiliated systems (QuickBooks, Voxelcare). Franchise = sister stores like katy@, greenville@, acworth@, etc.
+- Skip noise: routine OOO replies, automated calendar invites, marketing list footers.
+
+Workflow (be efficient):
+1. cache_query({ kind: 'vendor', since: <window-start> }) — get vendor activity
+2. cache_query({ kind: 'corporate', since: <window-start> }) — get HQ
+3. cache_query({ kind: 'franchise', since: <window-start> }) — get sister stores
+4. cache_query({ kind: 'customer', since: <window-start> }) — get customer threads
+5. Read 2-4 specific messages with cache_read for the most consequential items
+6. Optional: 1-3 Tavily searches if a vendor has a noteworthy news angle
+7. submit_highlights with all sections populated
+
+By your 12th total tool call, submit_highlights MUST be next.`;
+}
+
+async function runDailyHighlights(): Promise<CachedHighlights> {
+  // 48-hour window covers Sat→Tue cleanly given the store is closed Sun/Mon.
+  const windowDays = 2;
+  const today = ctDateStr();
+  const since = ctDateStr(new Date(Date.now() - windowDays * 86400 * 1000));
+  void since;
+
+  const messages: Message[] = [
+    {
+      role: 'user',
+      content: [
+        {
+          text: `Produce the daily highlights for ${today}. Window: messages with date >= ${ctDateStr(
+            new Date(Date.now() - windowDays * 86400 * 1000)
+          )}. Begin by querying the cache for each kind. Submit early.`,
+        },
+      ],
+    },
+  ];
+
+  const MAX_ROUNDS = 18;
+  let highlights: DailyHighlights['vendors'] extends unknown ? Partial<DailyHighlights> | null : null;
+  highlights = null;
+  let lastText: string | null = null;
+  let webSearchCount = 0;
+  const WEB_SEARCH_CAP = 3;
+
+  for (let round = 0; round < MAX_ROUNDS; round++) {
+    const response = await bedrockClient.send(
+      new ConverseCommand({
+        modelId: MODEL_ID,
+        system: [{ text: buildHighlightsSystemPrompt(windowDays, today) }],
+        messages,
+        toolConfig: { tools: HIGHLIGHTS_TOOLS },
+        inferenceConfig: { maxTokens: 3000, temperature: 0.2 },
+      })
+    );
+    const assistantContent = response.output?.message?.content ?? [];
+    messages.push({ role: 'assistant', content: assistantContent as ContentBlock[] });
+
+    const textBlk = assistantContent.find((b) => 'text' in b);
+    if (textBlk && 'text' in textBlk && textBlk.text) lastText = textBlk.text;
+
+    const stopReason = response.stopReason;
+
+    if (stopReason === 'tool_use') {
+      const toolBlocks = assistantContent.filter((b) => 'toolUse' in b);
+      const results: ContentBlock[] = [];
+
+      for (const block of toolBlocks) {
+        if (!('toolUse' in block) || !block.toolUse) continue;
+        const { toolUseId, name, input } = block.toolUse;
+        const inp = (input ?? {}) as Record<string, unknown>;
+
+        if (name === 'submit_highlights') {
+          highlights = inp as Partial<DailyHighlights>;
+          results.push({
+            toolResult: {
+              toolUseId: toolUseId ?? '',
+              content: [{ text: JSON.stringify({ ok: true }) }],
+              status: 'success',
+            },
+          });
+        } else if (name === 'cache_query') {
+          const r = await cacheQuery(inp as CachedQueryArgs);
+          results.push({
+            toolResult: {
+              toolUseId: toolUseId ?? '',
+              content: [{ text: JSON.stringify(r) }],
+              status: 'success',
+            },
+          });
+        } else if (name === 'cache_read') {
+          const id = String(inp['id'] ?? '');
+          const dateOnly = String(inp['dateOnly'] ?? '') || undefined;
+          const m = await cacheRead(id, dateOnly);
+          results.push({
+            toolResult: {
+              toolUseId: toolUseId ?? '',
+              content: [{ text: JSON.stringify(m ?? { error: `Message ${id} not in cache` }) }],
+              status: 'success',
+            },
+          });
+        } else if (name === 'web_search') {
+          if (webSearchCount >= WEB_SEARCH_CAP) {
+            results.push({
+              toolResult: {
+                toolUseId: toolUseId ?? '',
+                content: [
+                  {
+                    text: JSON.stringify({
+                      error: 'Web search cap reached. Submit highlights with what you have.',
+                    }),
+                  },
+                ],
+                status: 'error',
+              },
+            });
+          } else {
+            webSearchCount++;
+            try {
+              const r = await tavilySearch(String(inp['query'] ?? ''), {
+                topic: 'news',
+                days: Math.min(Number(inp['days']) || 7, 30),
+                maxResults: Math.min(Number(inp['maxResults']) || 5, 10),
+                includeAnswer: true,
+              });
+              results.push({
+                toolResult: {
+                  toolUseId: toolUseId ?? '',
+                  content: [{ text: JSON.stringify(r) }],
+                  status: 'success',
+                },
+              });
+            } catch (err) {
+              results.push({
+                toolResult: {
+                  toolUseId: toolUseId ?? '',
+                  content: [{ text: JSON.stringify({ error: (err as Error).message }) }],
+                  status: 'error',
+                },
+              });
+            }
+          }
+        } else {
+          results.push({
+            toolResult: {
+              toolUseId: toolUseId ?? '',
+              content: [{ text: JSON.stringify({ error: `unknown tool ${name}` }) }],
+              status: 'error',
+            },
+          });
+        }
+      }
+
+      messages.push({ role: 'user', content: results });
+      if (highlights) break;
+      continue;
+    }
+
+    break;
+  }
+
+  // Force-submit retry if needed — rebuild a clean messages array to avoid
+  // orphan tool_use blocks from the main loop.
+  if (!highlights) {
+    console.warn('Highlights: model did not call submit_highlights. Forcing.');
+    const forceMessages: Message[] = [
+      {
+        role: 'user',
+        content: [
+          {
+            text: `Submit your final daily highlights NOW for the last ${windowDays} days. Empty arrays are fine for sections without signal. Call submit_highlights exactly once.${
+              lastText ? `\n\nDraft you wrote: "${lastText.slice(0, 1500)}"` : ''
+            }`,
+          },
+        ],
+      },
+    ];
+    try {
+      const r = await bedrockClient.send(
+        new ConverseCommand({
+          modelId: MODEL_ID,
+          system: [{ text: buildHighlightsSystemPrompt(windowDays, today) }],
+          messages: forceMessages,
+          toolConfig: {
+            tools: HIGHLIGHTS_TOOLS,
+            toolChoice: { tool: { name: 'submit_highlights' } },
+          },
+          inferenceConfig: { maxTokens: 3000, temperature: 0.2 },
+        })
+      );
+      const finalContent = r.output?.message?.content ?? [];
+      const sb = finalContent.find(
+        (b) => 'toolUse' in b && b.toolUse?.name === 'submit_highlights'
+      );
+      if (sb && 'toolUse' in sb && sb.toolUse) {
+        highlights = sb.toolUse.input as Partial<DailyHighlights>;
+      }
+    } catch (err) {
+      console.warn('Highlights force-submit failed:', (err as Error).message);
+    }
+  }
+
+  // Last-resort fallback
+  if (!highlights) {
+    highlights = {
+      vendors: [],
+      network: { fromCorporate: [], fromOtherStores: [] },
+      customers: [],
+    };
+  }
+
+  const safe: CachedHighlights = {
+    generatedAt: new Date().toISOString(),
+    windowDays,
+    vendors: Array.isArray(highlights.vendors) ? highlights.vendors : [],
+    network: {
+      fromCorporate: Array.isArray(highlights.network?.fromCorporate)
+        ? highlights.network!.fromCorporate
+        : [],
+      fromOtherStores: Array.isArray(highlights.network?.fromOtherStores)
+        ? highlights.network!.fromOtherStores
+        : [],
+    },
+    customers: Array.isArray(highlights.customers) ? highlights.customers : [],
+    modelId: MODEL_ID,
+    status: 'ready',
+    runEndedAt: new Date().toISOString(),
+    lastError: null,
+  };
+  void lastText;
+
+  // Resolve every messageId into a threadId so the UI's deep links work.
+  await annotateHighlightsWithThreadIds(safe);
+
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: { userId: OWNER_USER_ID, sk: HIGHLIGHTS_SK, ...safe },
+    })
+  );
+  return safe;
+}
+
+async function annotateHighlightsWithThreadIds(safe: CachedHighlights): Promise<void> {
+  // Drop hallucinated IDs first
+  for (const v of safe.vendors ?? []) v.sourceMessageIds = sanitizeIds(v.sourceMessageIds);
+  for (const c of safe.customers ?? []) c.sourceMessageIds = sanitizeIds(c.sourceMessageIds);
+  for (const n of safe.network?.fromCorporate ?? [])
+    n.sourceMessageIds = sanitizeIds(n.sourceMessageIds);
+  for (const n of safe.network?.fromOtherStores ?? [])
+    n.sourceMessageIds = sanitizeIds(n.sourceMessageIds);
+
+  const allIds = new Set<string>();
+  for (const v of safe.vendors ?? []) for (const id of v.sourceMessageIds ?? []) allIds.add(id);
+  for (const c of safe.customers ?? []) for (const id of c.sourceMessageIds ?? []) allIds.add(id);
+  for (const n of safe.network?.fromCorporate ?? [])
+    for (const id of n.sourceMessageIds ?? []) allIds.add(id);
+  for (const n of safe.network?.fromOtherStores ?? [])
+    for (const id of n.sourceMessageIds ?? []) allIds.add(id);
+  if (allIds.size === 0) return;
+  const map = await resolveThreadIds([...allIds]);
+  const annotate = (item: HighlightItem) => {
+    (item as { sourceThreadIds?: string[] }).sourceThreadIds =
+      (item.sourceMessageIds ?? []).map((id) => map[id] ?? id);
+  };
+  safe.vendors.forEach(annotate);
+  safe.customers.forEach(annotate);
+  safe.network.fromCorporate.forEach(annotate);
+  safe.network.fromOtherStores.forEach(annotate);
+}
+
+async function getCachedHighlights(): Promise<CachedHighlights | null> {
+  const r = await docClient.send(
+    new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: HIGHLIGHTS_SK } })
+  );
+  return ((r.Item as unknown) as CachedHighlights) ?? null;
+}
+
+async function markHighlightsRunning(): Promise<void> {
+  const existing = (await getCachedHighlights()) ?? ({} as Partial<CachedHighlights>);
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: HIGHLIGHTS_SK,
+        ...existing,
+        status: 'running',
+        runStartedAt: new Date().toISOString(),
+        lastError: null,
+      },
+    })
+  );
+}
+
+async function markHighlightsError(message: string): Promise<void> {
+  const existing = (await getCachedHighlights()) ?? ({} as Partial<CachedHighlights>);
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: HIGHLIGHTS_SK,
+        ...existing,
+        status: 'error',
+        runEndedAt: new Date().toISOString(),
+        lastError: message,
+      },
+    })
+  );
+}
+
+// ── Async run state ──────────────────────────────────────────────────
+//
+// "running" / "error" markers on the cached analysis row let the GET
+// endpoint distinguish "still working" from "ready" from "failed".
+
+interface AsyncInvokePayload {
+  __mode: 'analyze' | 'highlights';
+  days?: number;
+}
+
+async function markAnalysisRunning(days: number): Promise<void> {
+  const existing = (await getCachedAnalysis()) ?? ({} as Partial<CachedAnalysis>);
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: ANALYSIS_SK,
+        // Keep prior result fields so the UI can still render the last one
+        // while the new run is in flight.
+        ...existing,
+        status: 'running',
+        rangeDaysRequested: days,
+        runStartedAt: new Date().toISOString(),
+        lastError: null,
+      },
+    })
+  );
+}
+
+async function markAnalysisError(days: number, message: string): Promise<void> {
+  const existing = (await getCachedAnalysis()) ?? ({} as Partial<CachedAnalysis>);
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: ANALYSIS_SK,
+        ...existing,
+        status: 'error',
+        rangeDaysRequested: days,
+        lastError: message,
+        runEndedAt: new Date().toISOString(),
+      },
+    })
+  );
+}
+
 // ── Route dispatch ───────────────────────────────────────────────────
 
 export const handler = async (
-  event: APIGatewayProxyEventV2WithJWTAuthorizer
-): Promise<APIGatewayProxyResultV2> => {
-  const route = event.routeKey;
+  event: APIGatewayProxyEventV2WithJWTAuthorizer | AsyncInvokePayload
+): Promise<APIGatewayProxyResultV2 | { ok: boolean }> => {
+  // Async self-invocation path — bypasses API Gateway's 30s timeout.
+  if (typeof event === 'object' && event !== null && '__mode' in event && event.__mode === 'analyze') {
+    const days = Math.min(Math.max(Number(event.days) || 14, 1), 180);
+    try {
+      const fresh = await runAnalyze(days);
+      // Mark run complete by overwriting the row with the fresh analysis +
+      // status=ready (runAnalyze already saves the data; just patch status).
+      await docClient.send(
+        new PutCommand({
+          TableName: TABLE_NAME,
+          Item: {
+            userId: OWNER_USER_ID,
+            sk: ANALYSIS_SK,
+            ...fresh,
+            status: 'ready',
+            runEndedAt: new Date().toISOString(),
+            lastError: null,
+          },
+        })
+      );
+      return { ok: true };
+    } catch (err) {
+      console.error('async analyze error:', (err as Error).message, (err as Error).stack);
+      await markAnalysisError(days, (err as Error).message);
+      return { ok: false };
+    }
+  }
+
+  if (typeof event === 'object' && event !== null && '__mode' in event && event.__mode === 'highlights') {
+    try {
+      await runDailyHighlights();
+      return { ok: true };
+    } catch (err) {
+      console.error('async highlights error:', (err as Error).message, (err as Error).stack);
+      await markHighlightsError((err as Error).message);
+      return { ok: false };
+    }
+  }
+
+  const apiEvent = event as APIGatewayProxyEventV2WithJWTAuthorizer;
+  const route = apiEvent.routeKey;
 
   try {
     if (route === 'POST /gmail/analyze') {
       let body: { days?: number; refresh?: boolean } = {};
       try {
-        body = JSON.parse(event.body ?? '{}');
+        body = JSON.parse(apiEvent.body ?? '{}');
       } catch {
         return json(400, { error: 'Invalid JSON body' });
       }
       const days = Math.min(Math.max(Number(body.days) || 14, 1), 180);
       const refresh = !!body.refresh;
 
-      // Try cache first
-      if (!refresh) {
-        const cached = await getCachedAnalysis();
-        if (
-          cached &&
-          cached.rangeDays === days &&
-          cached.generatedAt &&
-          Date.now() - new Date(cached.generatedAt).getTime() < ANALYSIS_CACHE_TTL_MS
-        ) {
-          return json(200, { ...cached, fromCache: true });
+      const cached = await getCachedAnalysis();
+
+      // Fresh enough to serve directly?
+      if (
+        !refresh &&
+        cached &&
+        (cached as Partial<CachedAnalysis> & { status?: string }).status !== 'running' &&
+        cached.rangeDays === days &&
+        cached.generatedAt &&
+        Date.now() - new Date(cached.generatedAt).getTime() < ANALYSIS_CACHE_TTL_MS
+      ) {
+        return json(200, { ...cached, status: 'ready', fromCache: true });
+      }
+
+      // Already running? Don't kick off a duplicate.
+      if (
+        cached &&
+        (cached as Partial<CachedAnalysis> & { status?: string }).status === 'running'
+      ) {
+        const startedAt = (cached as Partial<CachedAnalysis> & { runStartedAt?: string })
+          .runStartedAt;
+        // If the prior run is older than 6 minutes, assume it died and start fresh.
+        const stalled =
+          startedAt && Date.now() - new Date(startedAt).getTime() > 6 * 60 * 1000;
+        if (!stalled) {
+          return json(202, {
+            status: 'running',
+            runStartedAt: startedAt,
+            message: 'Analysis already in progress.',
+          });
         }
       }
 
-      const fresh = await runAnalyze(days);
-      return json(200, { ...fresh, fromCache: false });
+      // Mark running and fire-and-forget self-invoke.
+      await markAnalysisRunning(days);
+      await lambdaClient.send(
+        new InvokeCommand({
+          FunctionName: SELF_FUNCTION_NAME,
+          InvocationType: 'Event', // async — returns immediately
+          Payload: Buffer.from(
+            JSON.stringify({ __mode: 'analyze', days } satisfies AsyncInvokePayload)
+          ),
+        })
+      );
+
+      return json(202, {
+        status: 'running',
+        runStartedAt: new Date().toISOString(),
+        message: 'Analysis started. Poll GET /gmail/analyze for the result.',
+      });
     }
 
     if (route === 'GET /gmail/analyze') {
-      // Convenience: return whatever's cached without recomputing
       const cached = await getCachedAnalysis();
-      if (!cached) return json(404, { error: 'No analysis cached yet' });
-      return json(200, { ...cached, fromCache: true });
+      if (!cached) {
+        return json(404, { status: 'none', error: 'No analysis cached yet' });
+      }
+      const status =
+        (cached as Partial<CachedAnalysis> & { status?: string }).status ?? 'ready';
+      // If we have a usable analysis, return it regardless of status so the
+      // UI can show last-good while a new run is in flight.
+      return json(200, { ...cached, status, fromCache: true });
     }
 
     if (route === 'POST /gmail/chat') {
       let body: { messages?: ChatMessageInput[] };
       try {
-        body = JSON.parse(event.body ?? '{}');
+        body = JSON.parse(apiEvent.body ?? '{}');
       } catch {
         return json(400, { error: 'Invalid JSON body' });
       }
@@ -982,6 +1814,61 @@ export const handler = async (
     if (route === 'GET /gmail/cache-stats') {
       const stats = await cacheStats();
       return json(200, stats);
+    }
+
+    if (route === 'POST /pos/daily-highlights') {
+      let body: { refresh?: boolean } = {};
+      try {
+        body = JSON.parse(apiEvent.body ?? '{}');
+      } catch {
+        return json(400, { error: 'Invalid JSON body' });
+      }
+      const refresh = !!body.refresh;
+      const cached = await getCachedHighlights();
+
+      if (
+        !refresh &&
+        cached &&
+        cached.status !== 'running' &&
+        cached.generatedAt &&
+        Date.now() - new Date(cached.generatedAt).getTime() < HIGHLIGHTS_CACHE_TTL_MS
+      ) {
+        return json(200, { ...cached, status: 'ready', fromCache: true });
+      }
+
+      if (cached && cached.status === 'running') {
+        const startedAt = cached.runStartedAt;
+        const stalled =
+          startedAt && Date.now() - new Date(startedAt).getTime() > 6 * 60 * 1000;
+        if (!stalled) {
+          return json(202, { status: 'running', runStartedAt: startedAt });
+        }
+      }
+
+      await markHighlightsRunning();
+      await lambdaClient.send(
+        new InvokeCommand({
+          FunctionName: SELF_FUNCTION_NAME,
+          InvocationType: 'Event',
+          Payload: Buffer.from(
+            JSON.stringify({ __mode: 'highlights' } satisfies AsyncInvokePayload)
+          ),
+        })
+      );
+
+      return json(202, {
+        status: 'running',
+        runStartedAt: new Date().toISOString(),
+        message: 'Highlights generation started.',
+      });
+    }
+
+    if (route === 'GET /pos/daily-highlights') {
+      const cached = await getCachedHighlights();
+      if (!cached) {
+        return json(404, { status: 'none', error: 'No highlights yet.' });
+      }
+      return json(200, { ...cached, status: cached.status ?? 'ready', fromCache: true });
     }
 
     return json(404, { error: `Unknown route ${route}` });

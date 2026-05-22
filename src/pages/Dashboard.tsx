@@ -25,18 +25,18 @@ const ALL_TILES = [
     visibilityKey: null,
   },
   {
-    title: 'CPA Tax Assistant',
-    icon: Calculator,
-    href: '/tax',
-    active: true,
-    visibilityKey: 'dashboard.tile.tax' as const,
-  },
-  {
     title: 'Gmail Analysis',
     icon: Mail,
     href: '/gmail',
     active: true,
     visibilityKey: 'dashboard.tile.gmail' as const,
+  },
+  {
+    title: 'CPA Tax Assistant',
+    icon: Calculator,
+    href: '/tax',
+    active: true,
+    visibilityKey: 'dashboard.tile.tax' as const,
   },
   {
     title: 'Credentials',

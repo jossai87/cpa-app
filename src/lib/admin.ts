@@ -29,7 +29,7 @@ export const ADMIN_EMAIL = 'jandoossai@gmail.com';
 /** All visibility keys + hardcoded defaults for non-admins. */
 export const VISIBILITY_KEYS = {
   'dashboard.tile.tax':            { label: 'Dashboard — CPA Tax Assistant tile',  defaultVisible: false },
-  'dashboard.tile.gmail':          { label: 'Dashboard — Gmail Analysis tile',     defaultVisible: false },
+  'dashboard.tile.gmail':          { label: 'Dashboard — Gmail Analysis tile',     defaultVisible: true  },
   'credentials.gmail-corporate':   { label: 'Credentials — Foot Solutions Corporate Gmail', defaultVisible: false },
   'sales.tab.reporting':           { label: 'Sales & Revenue — Reporting tab',     defaultVisible: false },
   'sales.trends.totalRevenue':     { label: 'Sales & Revenue — Total Revenue (Trends tab)', defaultVisible: false },

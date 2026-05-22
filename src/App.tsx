@@ -8,6 +8,7 @@ import Credentials from './pages/Credentials';
 import SalesRevenue from './pages/SalesRevenue';
 import GmailAnalysis from './pages/GmailAnalysis';
 import Spinner from './components/Spinner';
+import ErrorBoundary from './components/ErrorBoundary';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -24,7 +25,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  return <>{children}</>;
+  // Wrap each protected route in an error boundary so a runtime crash in
+  // one page doesn't blank the entire app — users can still navigate back
+  // to the dashboard or retry.
+  return <ErrorBoundary>{children}</ErrorBoundary>;
 }
 
 export default function App() {
