@@ -959,6 +959,12 @@ export class FootSolutionsStack extends Stack {
       authorizer: jwtAuthorizer,
     });
     httpApi.addRoutes({
+      path: '/gmail/discover-vendor-accounts',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
       path: '/pos/daily-highlights',
       methods: [apigwv2.HttpMethod.POST, apigwv2.HttpMethod.GET],
       integration: gmailAnalysisIntegration,

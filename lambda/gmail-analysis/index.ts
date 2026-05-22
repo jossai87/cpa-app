@@ -1924,6 +1924,263 @@ async function markAnalysisError(days: number, message: string): Promise<void> {
   );
 }
 
+// ── Vendor account number discovery ──────────────────────────────────
+//
+// Scans the Gmail cache for each provided vendor brand, sends recent
+// messages to Bedrock with a strict tool schema that asks for the vendor
+// account number (if any). Auto-applies HIGH-confidence matches and
+// returns MEDIUM-confidence matches as suggestions for the user to review.
+
+interface DiscoveredAccount {
+  vendorId: number;
+  vendorName: string;
+  accountNumber: string;
+  confidence: 'high' | 'medium' | 'low';
+  evidence: string;
+  sourceMessageIds: string[];
+}
+
+interface DiscoveryResult {
+  applied: DiscoveredAccount[];
+  suggestions: DiscoveredAccount[];
+  skipped: Array<{ vendorId: number; vendorName: string; reason: string }>;
+  notFound: Array<{ vendorId: number; vendorName: string }>;
+  totalScanned: number;
+}
+
+const ACCOUNT_DISCOVERY_TOOL: Tool = {
+  toolSpec: {
+    name: 'submit_account_number',
+    description:
+      'Submit the discovered vendor account number for the brand the user asked about. Call this exactly once per vendor when finished. If you cannot find a clear account number, set accountNumber to an empty string and confidence to "low".',
+    inputSchema: {
+      json: {
+        type: 'object',
+        properties: {
+          accountNumber: {
+            type: 'string',
+            description:
+              'The account number / customer number the vendor uses to identify Foot Solutions Flower Mound. Examples: "97378", "FS-12345", "CUST-FOOT-001". Empty string if none found.',
+          },
+          confidence: {
+            type: 'string',
+            enum: ['high', 'medium', 'low'],
+            description:
+              'high = explicit "Account #" or "Customer #" label with a clear value. medium = inferred from a recurring identifier in invoice headers / signatures. low = guess or no clear evidence.',
+          },
+          evidence: {
+            type: 'string',
+            description:
+              'One short sentence quoting or paraphrasing where you saw the number (e.g. "Invoice header reads Account: 97378", or "Multiple invoices have customer code FS-1138 in the PDF subject line").',
+          },
+          sourceMessageIds: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'IDs of the cached messages where the number appears. Copy verbatim from the cache_query / cache_read results. Empty array if you found nothing.',
+          },
+        },
+        required: ['accountNumber', 'confidence', 'evidence', 'sourceMessageIds'],
+      } as unknown as Record<string, never>,
+    },
+  },
+};
+
+function isLikelyAccountNumber(s: string): boolean {
+  const v = (s ?? '').trim();
+  if (v.length < 3 || v.length > 30) return false;
+  // Must contain at least one digit and only allowed chars
+  if (!/\d/.test(v)) return false;
+  if (!/^[A-Za-z0-9._\-/#]+$/.test(v)) return false;
+  // Reject obvious phone numbers (10-11 digits, no other separators)
+  const digitsOnly = v.replace(/\D/g, '');
+  if (/^[A-Za-z]{0,2}\d{10,11}$/.test(v) && digitsOnly.length >= 10) return false;
+  // Reject obvious emails / URLs
+  if (v.includes('@') || v.includes('://')) return false;
+  return true;
+}
+
+async function discoverOneVendorAccount(
+  vendorName: string,
+  vendorId: number
+): Promise<Omit<DiscoveredAccount, 'vendorId' | 'vendorName'> | null> {
+  // Pull up to 12 recent cached emails for this vendor (any kind, last
+  // 365 days). We use the canonical metadata + body bodies.
+  const since = new Date(Date.now() - 365 * 86400 * 1000).toISOString().slice(0, 10);
+  const queryRes = await cacheQuery({ vendor: vendorName, since, limit: 12 });
+  if (queryRes.rows.length === 0) return null;
+
+  // Fetch full bodies for the top 6 — enough context for a quick Haiku scan.
+  const bodies = await Promise.all(
+    queryRes.rows.slice(0, 6).map(async (r) => {
+      try {
+        const full = await cacheRead(r.id, r.dateOnly);
+        return {
+          id: r.id,
+          dateOnly: r.dateOnly,
+          from: r.from,
+          subject: r.subject,
+          bodyText: (full?.bodyText ?? r.snippet ?? '').slice(0, 2500),
+        };
+      } catch {
+        return {
+          id: r.id,
+          dateOnly: r.dateOnly,
+          from: r.from,
+          subject: r.subject,
+          bodyText: (r.snippet ?? '').slice(0, 1000),
+        };
+      }
+    })
+  );
+
+  const corpus = bodies
+    .map(
+      (b, i) =>
+        `[${i + 1}] id=${b.id} | ${b.dateOnly} | from: ${b.from} | subject: ${b.subject}\n${b.bodyText}`
+    )
+    .join('\n\n---\n\n');
+
+  const systemPrompt = `You are an account-number extraction tool for a small footwear retail store (Foot Solutions Flower Mound).
+Your job: scan the provided emails from a single vendor and find the store's account / customer number with that vendor.
+
+What counts as an account number:
+- Explicit labels: "Account #", "Customer #", "Cust #", "Account ID", "Account No.", "Customer ID", "Acct #"
+- Numbers in invoice headers next to "BILL TO: Foot Solutions Flower Mound"
+- Recurring vendor-side identifiers that appear on every invoice for THIS store (not invoice numbers, not order numbers, not PO numbers)
+
+What does NOT count:
+- Phone numbers, fax numbers
+- Invoice numbers, order numbers, tracking numbers, PO numbers
+- Email addresses, URLs
+- Tax IDs, EINs (those are for the store)
+- Random numbers in product SKUs
+
+Rules:
+- If multiple candidates exist, pick the one labeled most clearly as "Account" or "Customer" number.
+- If you find nothing clearly identifiable, return accountNumber="" with confidence="low".
+- NEVER invent or guess. If unsure, pick "low" confidence.
+- Always call submit_account_number exactly once.`;
+
+  const userPrompt = `Vendor: ${vendorName}
+
+Emails from this vendor (most recent first):
+
+${corpus}
+
+Find the account number Foot Solutions has with ${vendorName} and call submit_account_number.`;
+
+  const response = await bedrockClient.send(
+    new ConverseCommand({
+      modelId: MODEL_ID,
+      system: [{ text: systemPrompt }],
+      messages: [{ role: 'user', content: [{ text: userPrompt }] }],
+      toolConfig: {
+        tools: [ACCOUNT_DISCOVERY_TOOL],
+        toolChoice: { tool: { name: 'submit_account_number' } },
+      },
+      inferenceConfig: { maxTokens: 400, temperature: 0 },
+    })
+  );
+
+  const content = response.output?.message?.content ?? [];
+  const submit = content.find(
+    (b) => 'toolUse' in b && b.toolUse?.name === 'submit_account_number'
+  );
+  if (!submit || !('toolUse' in submit) || !submit.toolUse) return null;
+
+  const input = (submit.toolUse.input ?? {}) as {
+    accountNumber?: string;
+    confidence?: 'high' | 'medium' | 'low';
+    evidence?: string;
+    sourceMessageIds?: string[];
+  };
+
+  const accountNumber = (input.accountNumber ?? '').trim();
+  if (!accountNumber || !isLikelyAccountNumber(accountNumber)) return null;
+
+  return {
+    accountNumber,
+    confidence: input.confidence ?? 'low',
+    evidence: (input.evidence ?? '').slice(0, 240),
+    sourceMessageIds: (input.sourceMessageIds ?? []).filter(isLikelyGmailId).slice(0, 4),
+  };
+}
+
+async function discoverVendorAccounts(
+  vendors: Array<{ id: number; name: string }>,
+  existingAccounts: Record<string, string>
+): Promise<DiscoveryResult> {
+  const applied: DiscoveredAccount[] = [];
+  const suggestions: DiscoveredAccount[] = [];
+  const skipped: Array<{ vendorId: number; vendorName: string; reason: string }> = [];
+  const notFound: Array<{ vendorId: number; vendorName: string }> = [];
+
+  // Cap to keep per-run cost bounded and stay under API GW timeout.
+  const MAX_VENDORS = 60;
+  const todo = vendors.slice(0, MAX_VENDORS);
+
+  // Process in parallel chunks of 4 to balance speed vs Bedrock throttling.
+  const CHUNK = 4;
+  for (let i = 0; i < todo.length; i += CHUNK) {
+    const chunk = todo.slice(i, i + CHUNK);
+    await Promise.all(
+      chunk.map(async (v) => {
+        const name = (v.name ?? '').trim();
+        if (!name) {
+          skipped.push({ vendorId: v.id, vendorName: name, reason: 'no name' });
+          return;
+        }
+        const existing = (existingAccounts[String(v.id)] ?? '').trim();
+        if (existing) {
+          skipped.push({
+            vendorId: v.id,
+            vendorName: name,
+            reason: 'already set',
+          });
+          return;
+        }
+        try {
+          const res = await discoverOneVendorAccount(name, v.id);
+          if (!res) {
+            notFound.push({ vendorId: v.id, vendorName: name });
+            return;
+          }
+          const record: DiscoveredAccount = {
+            vendorId: v.id,
+            vendorName: name,
+            ...res,
+          };
+          if (res.confidence === 'high') {
+            applied.push(record);
+          } else if (res.confidence === 'medium') {
+            suggestions.push(record);
+          } else {
+            notFound.push({ vendorId: v.id, vendorName: name });
+          }
+        } catch (err) {
+          console.warn(
+            `account discovery failed for ${name}: ${(err as Error).message}`
+          );
+          skipped.push({
+            vendorId: v.id,
+            vendorName: name,
+            reason: (err as Error).message,
+          });
+        }
+      })
+    );
+  }
+
+  return {
+    applied,
+    suggestions,
+    skipped,
+    notFound,
+    totalScanned: todo.length,
+  };
+}
+
 // ── Route dispatch ───────────────────────────────────────────────────
 
 export const handler = async (
@@ -2044,6 +2301,22 @@ export const handler = async (
       // If we have a usable analysis, return it regardless of status so the
       // UI can show last-good while a new run is in flight.
       return json(200, { ...cached, status, fromCache: true });
+    }
+
+    if (route === 'POST /gmail/discover-vendor-accounts') {
+      let body: { vendors?: Array<{ id: number; name: string }>; existingAccounts?: Record<string, string> } = {};
+      try {
+        body = JSON.parse(apiEvent.body ?? '{}');
+      } catch {
+        return json(400, { error: 'Invalid JSON body' });
+      }
+      const vendors = Array.isArray(body.vendors) ? body.vendors : [];
+      if (vendors.length === 0) {
+        return json(400, { error: 'vendors array is required' });
+      }
+      const existingAccounts = body.existingAccounts ?? {};
+      const result = await discoverVendorAccounts(vendors, existingAccounts);
+      return json(200, result);
     }
 
     if (route === 'POST /gmail/chat') {

@@ -876,6 +876,8 @@ export default function SalesRevenue() {
     repPhone?: string;
     repEmail?: string;
     repTitle?: string;
+    /** Vendor-side account / customer number for THIS store. */
+    account?: string;
   }
   interface VendorContact {
     id: string;
@@ -907,6 +909,71 @@ export default function SalesRevenue() {
       void queryClient.invalidateQueries({ queryKey: ['pos', 'vendor-settings'] });
     },
   });
+
+  // ── Vendor account-number discovery (Gmail-cache scan via Bedrock) ──
+  interface DiscoveredAccount {
+    vendorId: number;
+    vendorName: string;
+    accountNumber: string;
+    confidence: 'high' | 'medium' | 'low';
+    evidence: string;
+    sourceMessageIds: string[];
+  }
+  interface DiscoveryResult {
+    applied: DiscoveredAccount[];
+    suggestions: DiscoveredAccount[];
+    skipped: Array<{ vendorId: number; vendorName: string; reason: string }>;
+    notFound: Array<{ vendorId: number; vendorName: string }>;
+    totalScanned: number;
+  }
+  const [discoveryResult, setDiscoveryResult] = useState<DiscoveryResult | null>(null);
+  const accountDiscoveryMutation = useMutation({
+    mutationFn: async (
+      vendors: Array<{ id: number; name: string }>
+    ): Promise<DiscoveryResult> => {
+      // Pass the existing-account map so the backend skips anything the
+      // user already filled in manually.
+      const existingAccounts: Record<string, string> = {};
+      for (const [id, ov] of Object.entries(vendorOverrides)) {
+        if (ov.account) existingAccounts[id] = ov.account;
+      }
+      const r = await api.post<DiscoveryResult>(
+        '/gmail/discover-vendor-accounts',
+        { vendors, existingAccounts }
+      );
+      return r.data;
+    },
+    onSuccess: (result) => {
+      setDiscoveryResult(result);
+      // Auto-apply HIGH confidence matches into the overrides.
+      if (result.applied.length > 0) {
+        const next = { ...vendorOverrides };
+        for (const a of result.applied) {
+          next[a.vendorId] = { ...(next[a.vendorId] ?? {}), account: a.accountNumber };
+        }
+        vendorSettingsMutation.mutate({
+          vendorOverrides: Object.fromEntries(
+            Object.entries(next).map(([k, v]) => [String(k), v])
+          ),
+        } as Partial<VendorSettingsResponse>);
+      }
+    },
+  });
+
+  function applySuggestion(vendorId: number, accountNumber: string) {
+    const next = { ...vendorOverrides };
+    next[vendorId] = { ...(next[vendorId] ?? {}), account: accountNumber };
+    vendorSettingsMutation.mutate({
+      vendorOverrides: Object.fromEntries(
+        Object.entries(next).map(([k, v]) => [String(k), v])
+      ),
+    } as Partial<VendorSettingsResponse>);
+    setDiscoveryResult((prev) =>
+      prev
+        ? { ...prev, suggestions: prev.suggestions.filter((s) => s.vendorId !== vendorId) }
+        : prev
+    );
+  }
 
   // Derive local state from the query result (falls back to empty while loading)
   const activeAccounts = new Set<string>(vendorSettingsQ.data?.activeAccounts ?? []);
@@ -2655,15 +2722,129 @@ export default function SalesRevenue() {
                   <div className="bg-white rounded-lg border border-slate-200 p-5">
                     <div className="flex items-start justify-between gap-3 mb-1">
                       <h3 className="text-sm font-semibold text-slate-900">Vendor Directory</h3>
-                      <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-2.5 py-1 shrink-0">
-                        <ShoppingBag className="w-3.5 h-3.5" />
-                        <span className="text-xs font-semibold">{(d.vendorCount - 1).toLocaleString()}</span>
-                        <span className="text-[10px] uppercase tracking-wide text-blue-700">vendors</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const eligible = [...d.vendors]
+                              .filter((v) => {
+                                const name = (v.name ?? '').toLowerCase();
+                                return name && !name.includes('foot solutions inc') && !name.includes('fs corp');
+                              })
+                              .map((v) => ({ id: v.id, name: v.name ?? '' }));
+                            setDiscoveryResult(null);
+                            accountDiscoveryMutation.mutate(eligible);
+                          }}
+                          disabled={accountDiscoveryMutation.isPending}
+                          title="Scan Gmail cache to find vendor account / customer numbers and auto-apply high-confidence matches"
+                          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition"
+                        >
+                          {accountDiscoveryMutation.isPending ? (
+                            <Spinner size="sm" />
+                          ) : (
+                            <Search className="w-3 h-3" />
+                          )}
+                          {accountDiscoveryMutation.isPending ? 'Scanning…' : 'Find account #s'}
+                        </button>
+                        <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-2.5 py-1">
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                          <span className="text-xs font-semibold">{(d.vendorCount - 1).toLocaleString()}</span>
+                          <span className="text-[10px] uppercase tracking-wide text-blue-700">vendors</span>
+                        </div>
                       </div>
                     </div>
                     <p className="text-xs text-slate-500 mb-3">
                       Sorted by YTD net sales (highest first). Check the box to mark an active account.
                     </p>
+
+                    {/* Discovery result panel — shown after a scan completes */}
+                    {discoveryResult && (
+                      <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs font-semibold text-slate-700">
+                            Account # scan: scanned {discoveryResult.totalScanned} vendors
+                            {' · '}
+                            <span className="text-emerald-700">
+                              applied {discoveryResult.applied.length}
+                            </span>
+                            {discoveryResult.suggestions.length > 0 && (
+                              <>
+                                {' · '}
+                                <span className="text-amber-700">
+                                  {discoveryResult.suggestions.length} need review
+                                </span>
+                              </>
+                            )}
+                            {' · '}
+                            <span className="text-slate-500">
+                              {discoveryResult.notFound.length} not found
+                            </span>
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setDiscoveryResult(null)}
+                            className="text-slate-400 hover:text-slate-700"
+                            aria-label="Dismiss scan results"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        {discoveryResult.applied.length > 0 && (
+                          <div className="mb-2">
+                            <p className="text-[10px] font-medium text-emerald-700 uppercase tracking-wide mb-1">
+                              Auto-applied (high confidence)
+                            </p>
+                            <ul className="space-y-1">
+                              {discoveryResult.applied.map((a) => (
+                                <li key={a.vendorId} className="text-[11px] text-slate-700">
+                                  <span className="font-semibold">{a.vendorName}</span>
+                                  {' → '}
+                                  <span className="font-mono bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200">
+                                    {a.accountNumber}
+                                  </span>
+                                  {' '}
+                                  <span className="text-slate-400">— {a.evidence}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {discoveryResult.suggestions.length > 0 && (
+                          <div>
+                            <p className="text-[10px] font-medium text-amber-700 uppercase tracking-wide mb-1">
+                              Review & accept (medium confidence)
+                            </p>
+                            <ul className="space-y-1">
+                              {discoveryResult.suggestions.map((s) => (
+                                <li key={s.vendorId} className="text-[11px] text-slate-700 flex items-start gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <span className="font-semibold">{s.vendorName}</span>
+                                    {' → '}
+                                    <span className="font-mono bg-amber-50 px-1 py-0.5 rounded border border-amber-200">
+                                      {s.accountNumber}
+                                    </span>
+                                    {' '}
+                                    <span className="text-slate-400">— {s.evidence}</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => applySuggestion(s.vendorId, s.accountNumber)}
+                                    className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700 transition flex-shrink-0"
+                                  >
+                                    Accept
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {accountDiscoveryMutation.isError && (
+                      <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
+                        Failed to scan: {(accountDiscoveryMutation.error as Error)?.message ?? 'Unknown error'}
+                      </div>
+                    )}
                     {/* Search filter — matches name, phone, email, rep info,
                         and override fields. Case-insensitive substring match. */}
                     <div className="relative mb-4">
@@ -2780,6 +2961,9 @@ export default function SalesRevenue() {
                           const repPhone = ov.repPhone ?? info?.rep?.phone;
                           const repEmail = ov.repEmail ?? info?.rep?.email;
                           const repTitle = ov.repTitle ?? (info?.rep?.name ? '' : undefined);
+                          // Account # — override wins over the seed (which
+                          // historically lived on info.rep.account).
+                          const accountNumber = ov.account ?? info?.rep?.account;
                           const hasRep = repName || repPhone || repEmail;
 
                           const inputCls = "w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white";
@@ -2815,6 +2999,7 @@ export default function SalesRevenue() {
                                           repPhone: ov.repPhone ?? info?.rep?.phone ?? '',
                                           repEmail: ov.repEmail ?? info?.rep?.email ?? '',
                                           repTitle: ov.repTitle ?? '',
+                                          account: ov.account ?? info?.rep?.account ?? '',
                                         });
                                         setInlineEdit(null);
                                         setEditingContactsFor(null);
@@ -2884,6 +3069,8 @@ export default function SalesRevenue() {
                                   <input type="email" value={vendorCardDraft.email ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, email: e.target.value }))} className={inputCls} placeholder="Email" />
                                   <label className="text-[10px] text-slate-400">Website</label>
                                   <input type="text" value={vendorCardDraft.website ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, website: e.target.value }))} className={inputCls} placeholder="https://..." />
+                                  <label className="text-[10px] text-slate-400">Account #</label>
+                                  <input type="text" value={vendorCardDraft.account ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, account: e.target.value }))} className={inputCls} placeholder="e.g. 97378 or FS-12345" />
                                   <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide pt-1">Rep</p>
                                   <input type="text" value={vendorCardDraft.repName ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repName: e.target.value }))} className={inputCls} placeholder="Rep name" />
                                   <input type="text" value={vendorCardDraft.repTitle ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repTitle: e.target.value }))} className={inputCls} placeholder="Rep title / role" />
@@ -2900,6 +3087,16 @@ export default function SalesRevenue() {
                               ) : (
                                 /* ── Contact info display ── */
                                 <div className="space-y-0.5">
+                                  {accountNumber && (
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="text-[11px] text-slate-700 min-w-0 truncate">
+                                        <span className="text-slate-400">Account #</span>
+                                        {' '}
+                                        <span className="font-mono font-semibold">{accountNumber}</span>
+                                      </p>
+                                      <CopyButton value={accountNumber} label="account number" />
+                                    </div>
+                                  )}
                                   {phone && (
                                     <div className="flex items-center gap-1.5">
                                       <a href={`tel:${phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 min-w-0 truncate"><span>📞</span>{phone}</a>
@@ -2939,15 +3136,9 @@ export default function SalesRevenue() {
                                           <CopyButton value={repEmail} label="rep email" />
                                         </div>
                                       )}
-                                      {info?.rep?.account && (
-                                        <div className="flex items-center gap-1.5">
-                                          <p className="text-[11px] text-slate-500 min-w-0 truncate">Acct # {info.rep.account}</p>
-                                          <CopyButton value={info.rep.account} label="account number" />
-                                        </div>
-                                      )}
                                     </div>
                                   )}
-                                  {!phone && !email && !website && !hasRep && (
+                                  {!accountNumber && !phone && !email && !website && !hasRep && (
                                     <p className="text-[11px] text-slate-400 italic">No contact info — click ✏ to add</p>
                                   )}
                                 </div>
