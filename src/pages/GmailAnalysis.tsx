@@ -207,11 +207,12 @@ type AnalysisStateResponse = {
 };
 
 export default function GmailAnalysis() {
-  const [days, setDays] = useState<number>(14);
   const queryClient = useQueryClient();
 
   // GET /gmail/analyze — reads whatever's in the cache (ready, running, or error).
   // Poll every 4 seconds while a run is in flight; otherwise idle.
+  // Long staleTime + gcTime so navigating away and back doesn't refetch /
+  // re-analyze. Re-analyze only runs when the user clicks the button.
   const analysisQ = useQuery<AnalysisStateResponse>({
     queryKey: ['gmail', 'analyze'],
     queryFn: async () => {
@@ -228,9 +229,25 @@ export default function GmailAnalysis() {
       const d = q.state.data;
       return d?.status === 'running' ? 4000 : false;
     },
-    staleTime: 30 * 1000,
+    staleTime: 30 * 60 * 1000, // 30 min — persist across page navigation
+    gcTime: 60 * 60 * 1000, // 60 min — keep in memory long after unmount
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
     retry: 1,
   });
+
+  // Default the days selector to whatever range is already cached on the
+  // server. Falls back to 14 on first load. This means navigating back to
+  // the page won't trigger a "different range" auto-kick.
+  const [days, setDays] = useState<number>(() => analysisQ.data?.rangeDays ?? 14);
+  // If the server returns a cached range later than the initial render,
+  // sync the selector once so the UI matches what's actually displayed.
+  useEffect(() => {
+    if (analysisQ.data?.rangeDays && analysisQ.data.rangeDays !== days) {
+      setDays(analysisQ.data.rangeDays);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [analysisQ.data?.rangeDays]);
 
   const cacheStatsQ = useQuery<CacheStats>({
     queryKey: ['gmail', 'cache-stats'],
@@ -262,17 +279,18 @@ export default function GmailAnalysis() {
     },
   });
 
-  // Auto-kick a run if there's nothing cached, or if the cached result is for
-  // a different range than the user just selected. Only fires once per state.
-  const cachedRange = analysisQ.data?.rangeDays;
+  // Auto-kick a run ONLY if there's no cached analysis at all (first-time
+  // user). If a previous run exists for a different range, just show it —
+  // the user can click Re-analyze when they want fresh data. This prevents
+  // the page from triggering a costly re-analyze every time the user
+  // navigates away and back.
   const status = analysisQ.data?.status ?? 'none';
   const needsRun =
     !analysisQ.isLoading &&
     !analysisQ.isError &&
     !startRunMutation.isPending &&
     !startRunMutation.isError &&
-    status !== 'running' &&
-    (status === 'none' || (cachedRange !== undefined && cachedRange !== days));
+    status === 'none';
 
   // Auto-kick a run if there's nothing cached, or if the cached result is for
   // a different range than the user just selected. useEffect (not a raw
@@ -508,6 +526,54 @@ export default function GmailAnalysis() {
               <p className="text-sm text-slate-700 leading-relaxed">{result.overview}</p>
             </section>
 
+            {/* Follow-ups Needed — surfaced near the top so the most action-
+                oriented section is impossible to miss. */}
+            <section className="bg-white rounded-xl border border-slate-200 p-5">
+              <SectionHeader
+                icon={ListTodo}
+                title="Follow-ups Needed"
+                count={result.followUpsNeeded.length}
+                iconClass="bg-rose-100 text-rose-700"
+              />
+              {result.followUpsNeeded.length === 0 ? (
+                <EmptyState message="Inbox is clear — no obvious follow-ups." />
+              ) : (
+                <ul className="space-y-3">
+                  {result.followUpsNeeded.map((f, i) => {
+                    const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
+                    const hasSingleId = linkIds.length === 1;
+                    return (
+                      <li
+                        key={i}
+                        className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
+                      >
+                        <p className="text-sm font-medium text-slate-900">{f.title}</p>
+                        <p className="text-xs text-slate-600 mt-1">{f.why}</p>
+                        {hasSingleId ? (
+                          <a
+                            href={gmailMessageUrl(linkIds[0]!)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-rose-700 mt-1.5 font-medium hover:text-rose-900 hover:underline"
+                          >
+                            → {f.suggestedAction}
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        ) : (
+                          <p className="text-xs text-rose-700 mt-1.5 font-medium">
+                            → {f.suggestedAction}
+                          </p>
+                        )}
+                        {!hasSingleId && (
+                          <MessageLinks ids={linkIds} label="Reply in Gmail" />
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </section>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Events */}
               <section className="bg-white rounded-xl border border-slate-200 p-5">
@@ -658,10 +724,11 @@ export default function GmailAnalysis() {
                           return c.date;
                         }
                       })();
+                      const link = c.sourceThreadId ?? c.sourceMessageId;
                       const subject = (
                         <span className="text-sm font-medium text-slate-900 truncate inline-flex items-center gap-1">
                           {c.subject}
-                          {(c.sourceThreadId || c.sourceMessageId) && (
+                          {link && (
                             <ExternalLink className="w-3 h-3 opacity-60" />
                           )}
                         </span>
@@ -669,22 +736,19 @@ export default function GmailAnalysis() {
                       return (
                         <li key={i} className="border-l-2 border-purple-200 pl-3">
                           <div className="flex items-center gap-2 flex-wrap">
-                            {(() => {
-                              const link = c.sourceThreadId ?? c.sourceMessageId;
-                              return link ? (
-                                <a
-                                  href={gmailMessageUrl(link)}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="hover:text-purple-700 hover:underline truncate min-w-0"
-                                  title="Open in Gmail"
-                                >
-                                  {subject}
-                                </a>
-                              ) : (
-                                subject
-                              );
-                            })()}
+                            {link ? (
+                              <a
+                                href={gmailMessageUrl(link)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="hover:text-purple-700 hover:underline truncate min-w-0"
+                                title="Open in Gmail"
+                              >
+                                {subject}
+                              </a>
+                            ) : (
+                              subject
+                            )}
                             <span
                               className={`text-[9px] px-1.5 py-0.5 rounded-full border ${priorityClass(
                                 c.priority
@@ -703,6 +767,13 @@ export default function GmailAnalysis() {
                             )}
                           </p>
                           <p className="text-xs text-slate-600 mt-1">{c.summary}</p>
+                          {/* Always-visible Open-in-Gmail chip — mirrors how
+                              vendors / events / follow-ups expose their link
+                              affordance, so the link is impossible to miss
+                              even when the subject is truncated. */}
+                          {link && (
+                            <MessageLinks ids={[link]} label="Open in Gmail" />
+                          )}
                         </li>
                       );
                     })}
@@ -711,52 +782,7 @@ export default function GmailAnalysis() {
               </section>
             </div>
 
-            {/* Follow-ups (full width) */}
-            <section className="bg-white rounded-xl border border-slate-200 p-5">
-              <SectionHeader
-                icon={ListTodo}
-                title="Follow-ups Needed"
-                count={result.followUpsNeeded.length}
-                iconClass="bg-rose-100 text-rose-700"
-              />
-              {result.followUpsNeeded.length === 0 ? (
-                <EmptyState message="Inbox is clear — no obvious follow-ups." />
-              ) : (
-                <ul className="space-y-3">
-                  {result.followUpsNeeded.map((f, i) => {
-                    const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
-                    const hasSingleId = linkIds.length === 1;
-                    return (
-                      <li
-                        key={i}
-                        className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
-                      >
-                        <p className="text-sm font-medium text-slate-900">{f.title}</p>
-                        <p className="text-xs text-slate-600 mt-1">{f.why}</p>
-                        {hasSingleId ? (
-                          <a
-                            href={gmailMessageUrl(linkIds[0]!)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-rose-700 mt-1.5 font-medium hover:text-rose-900 hover:underline"
-                          >
-                            → {f.suggestedAction}
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
-                        ) : (
-                          <p className="text-xs text-rose-700 mt-1.5 font-medium">
-                            → {f.suggestedAction}
-                          </p>
-                        )}
-                        {!hasSingleId && (
-                          <MessageLinks ids={linkIds} label="Reply in Gmail" />
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </section>
+            {/* Follow-ups (moved to top of page, just under Overview) */}
 
             {/* Top senders */}
             <section className="bg-white rounded-xl border border-slate-200 p-5">

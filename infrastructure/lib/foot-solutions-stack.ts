@@ -860,9 +860,11 @@ export class FootSolutionsStack extends Stack {
       environment: {
         TABLE_NAME: table.tableName,
         OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
-        // Claude Sonnet 4.6 (1M context, native tool use, prompt caching).
-        // Override with BEDROCK_MODEL_ID env to swap models without redeploying.
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        // Claude Haiku 4.5 — primary analysis model. Same tool-use and
+        // structured-output quality as Sonnet for this workload at ~3×
+        // lower latency and ~3× lower cost. Override with BEDROCK_MODEL_ID
+        // to swap models without redeploying.
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
       },
       bundling: {
         minify: true,
@@ -885,7 +887,11 @@ export class FootSolutionsStack extends Stack {
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
         resources: [
-          // Claude Sonnet 4.6 (primary)
+          // Claude Haiku 4.5 (primary)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
+          // Claude Sonnet 4.6 (fallback / legacy)
           'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6',
           'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6',
           'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
@@ -1246,6 +1252,30 @@ export class FootSolutionsStack extends Stack {
           `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/gmail/*`,
           `arn:aws:secretsmanager:us-east-1:${this.account}:secret:foot-solutions/tavily/*`,
         ],
+      })
+    );
+
+    // Wire daily-report into the same S3 Vectors KB the chatbot uses, so
+    // briefings can pull semantic email matches (kb_semantic_search tool).
+    dailyReportFn.addEnvironment('VECTOR_BUCKET_NAME', vectorBucketName);
+    dailyReportFn.addEnvironment('VECTOR_INDEX_NAME', VECTOR_INDEX_NAME);
+    dailyReportFn.addEnvironment('EMBED_MODEL_ID', 'cohere.embed-multilingual-v3');
+    dailyReportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DailyReportEmbedQuery',
+        effect: iam.Effect.ALLOW,
+        actions: ['bedrock:InvokeModel'],
+        resources: [
+          `arn:aws:bedrock:${this.region}::foundation-model/cohere.embed-multilingual-v3`,
+        ],
+      })
+    );
+    dailyReportFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'DailyReportVectorQuery',
+        effect: iam.Effect.ALLOW,
+        actions: ['s3vectors:QueryVectors', 's3vectors:GetVectors', 's3vectors:GetIndex'],
+        resources: [vectorBucketArn, vectorIndexArn],
       })
     );
 

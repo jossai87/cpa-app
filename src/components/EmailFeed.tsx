@@ -63,14 +63,14 @@ export default function EmailFeed() {
           <button
             onClick={() => testMutation.mutate()}
             disabled={testMutation.isPending}
-            title="Trigger a test email now"
+            title="Generate a fresh briefing right now using yesterday's data plus the latest inbox + web signals"
             className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50 transition"
           >
             {testMutation.isPending
               ? <Loader2 className="w-3 h-3 animate-spin" />
               : <Send className="w-3 h-3" />
             }
-            Send test
+            Send new email
           </button>
         )}
       </div>

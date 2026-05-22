@@ -36,6 +36,7 @@ import {
   type CachedQueryArgs,
 } from '../gmail-analysis/cache';
 import { tavilySearch } from '../shared/tavily';
+import { kbSemanticSearch as vectorKbSearch } from '../shared/vectorIndex';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -422,6 +423,24 @@ const TOOLS: Tool[] = [
       },
     },
   },
+  // ── Semantic search over the inbox (Cohere embeddings + S3 Vectors) ──
+  {
+    toolSpec: {
+      name: 'kb_semantic_search',
+      description:
+        "Semantic / fuzzy search over the FULL TEXT of cached Gmail messages — use when the question is conceptual ('emails about pricing concerns', 'anyone hinting at a delayed shipment', 'complaints about fit') and exact-match cache_query (vendor / from / kind) won't surface it. Returns up to top_k message metadata + a body preview, ranked by relevance. Cheaper than read_email and broader than cache_query. Follow up with cache_read for full content if needed.",
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Natural-language search query.' },
+            top_k: { type: 'number', description: 'Default 6, max 15.' },
+          },
+          required: ['query'],
+        },
+      },
+    },
+  },
 ];
 
 // ── Tool execution ──────────────────────────────────────────────────
@@ -684,6 +703,18 @@ async function executeTool(name: string, input: Record<string, unknown>): Promis
       }
     }
 
+    case 'kb_semantic_search': {
+      const query = String(input['query'] ?? '');
+      if (!query) return JSON.stringify({ error: 'query is required' });
+      const topK = Math.min(Math.max(Number(input['top_k']) || 6, 1), 15);
+      try {
+        const hits = await vectorKbSearch(query, topK);
+        return JSON.stringify({ query, count: hits.length, hits });
+      } catch (err) {
+        return JSON.stringify({ error: `kb_semantic_search failed: ${(err as Error).message}` });
+      }
+    }
+
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -721,6 +752,7 @@ PREFER cache tools — they're faster and free:
   - cache_query({ kind, vendor?, since, until, from?, text?, limit })
   - cache_vendor_activity(vendor, days?)   — vendor rollup with last contact + top senders
   - cache_read(id, dateOnly?)              — full body of a cached email
+  - kb_semantic_search(query, top_k?)      — semantic / fuzzy search over message bodies. Use when the angle is conceptual ("vendors hinting at price hikes", "anything about a delayed shipment", "customers asking about fit issues") and exact-match cache_query won't find it. Cheaper than reading 10 emails to skim them.
 
 Live Gmail tools (only when cache doesn't cover what you need):
   - scan_recent_vendor_emails(days?)       — fast 14-day vendor sweep
@@ -733,10 +765,12 @@ Live Gmail tools (only when cache doesn't cover what you need):
 - Bad uses: routine vendor names, generic queries. Skip if you don't have a sharp question.
 
 ═══ HOW TO USE THESE TOOLS IN THE BRIEFING ═══
-- Vendor stories: combine cache_vendor_activity + (optionally) one web_search for industry context.
+- Today vs yesterday: ALWAYS pull both with get_sales_for_date for today AND yesterday. The owner's first question is "how did yesterday close out?" — anchor the briefing on yesterday's full-day numbers, then layer today's pace on top.
+- Vendor stories: combine cache_vendor_activity + (optionally) one web_search for industry context. For fuzzy concepts (price changes, shipment slips, returns talk) reach for kb_semantic_search instead of guessing keywords.
 - Corporate signals: cache_query({ kind: 'corporate', since: '<7 days ago>' }) → flag if HQ sent a regional sales report, marketing minute, training call, council vote, or system maintenance notice the owner should act on.
 - Franchise signals: cache_query({ kind: 'franchise', since: '<3 days ago>' }) → mention if sister stores are reporting wins/losses on shared threads (peer benchmarks).
-- Customer signals: cache_query({ kind: 'customer', since: '<3 days ago>' }) → flag unanswered appointment requests / fitting questions.
+- Customer signals: cache_query({ kind: 'customer', since: '<3 days ago>' }) plus a kb_semantic_search for "customer complaint" or "appointment request" if the cache_query is thin → flag unanswered messages.
+- Theme sweeps: when you suspect a recurring concern (e.g. "fit issues with the new Brooks model", "rep coverage gap"), kb_semantic_search is faster than scanning many threads.
 
 WHEN NOT TO USE INBOX TOOLS:
 - Do not list random emails. Inbox hits should only inform recommendations.

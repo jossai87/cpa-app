@@ -53,7 +53,7 @@ const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
 const MODEL_ID =
   process.env['BEDROCK_MODEL_ID'] ??
-  'global.anthropic.claude-sonnet-4-6';
+  'global.anthropic.claude-haiku-4-5-20251001-v1:0';
 
 const STORE_TZ = 'America/Chicago';
 const ANALYSIS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -674,6 +674,15 @@ Other rules:
 - Group vendor activity by brand — one entry per vendor with messageCount, not one per email.
 - For follow-ups, only include threads where the owner clearly owes a reply or action.
 
+SECTION COMPLETENESS — important:
+- Look at the seed before you submit. If the seed contains messages that match a category, the corresponding array MUST NOT be empty:
+  * Any message from a known vendor brand → at least one entry in vendors[]
+  * Any subject/snippet matching invoice/bill/payment due → at least one entry in invoices[]
+  * Any inbound customer message (kind=customer or to: footsolutions, from: an external person) → at least one entry in customerInquiries[]
+  * Any unanswered question or pending request → at least one entry in followUpsNeeded[]
+- Empty is only acceptable when you've checked the seed and there genuinely is no signal in this category. Don't be lazy: a 14-day window almost always has vendors and at least one invoice.
+- For customer inquiries: ALWAYS use the actual sender from the email (e.g. "Jane Doe <jane@example.com>"). NEVER write generic placeholders like "Customer (unknown)" — if you don't have a real sender, drop the entry instead.
+
 Begin by reviewing the seed. Be efficient. Submit early.`;
 }
 
@@ -937,24 +946,224 @@ async function annotateAnalysisWithThreadIds(safe: CachedAnalysis): Promise<void
         if ((v.sourceMessageIds?.length ?? 0) >= 3) return;
         const brand = (v.name ?? '').trim();
         if (!brand) return;
+        // The model sometimes lists a vendor as having activity even when
+        // the strict analysis window is empty (it carried context from the
+        // seed snippets or older mail). Try the analysis window first, then
+        // fall back to the last 180 days if we got nothing — it's still
+        // useful to give the user *something* to click into.
+        const fetchIds = async (
+          brandQuery: string,
+          sinceDate: string
+        ): Promise<string[]> => {
+          try {
+            const res = await cacheQuery({
+              vendor: brandQuery,
+              since: sinceDate,
+              limit: 6,
+            });
+            return res.rows.map((r) => r.id).filter(isLikelyGmailId);
+          } catch (err) {
+            console.warn(
+              `vendor backfill failed for ${brandQuery} (since=${sinceDate}): ${(err as Error).message}`
+            );
+            return [];
+          }
+        };
+        // The model can return composite labels like "Naot / Yaleet".
+        // Try the full label first; if nothing comes back, try each token.
+        const candidateBrands: string[] = [brand];
+        const tokens = brand
+          .split(/[\s/+,&·•|]+/)
+          .map((t) => t.trim())
+          .filter((t) => t.length >= 3 && t.length <= 30 && /[a-z]/i.test(t));
+        for (const t of tokens) {
+          if (!candidateBrands.includes(t)) candidateBrands.push(t);
+        }
+
+        let cachedIds: string[] = [];
+        const fallbackSince = new Date(Date.now() - 180 * 86400 * 1000)
+          .toISOString()
+          .slice(0, 10);
+        for (const cand of candidateBrands) {
+          cachedIds = await fetchIds(cand, since);
+          if (cachedIds.length > 0) break;
+          if (fallbackSince < since) {
+            cachedIds = await fetchIds(cand, fallbackSince);
+            if (cachedIds.length > 0) break;
+          }
+        }
+
+        // Merge: keep model-cited ids first, then add fresh cached ids
+        // we don't already have. Cap at 6 to keep the chip row tidy.
+        const existing = new Set(v.sourceMessageIds ?? []);
+        const merged = [...(v.sourceMessageIds ?? [])];
+        for (const id of cachedIds) {
+          if (merged.length >= 6) break;
+          if (!existing.has(id)) {
+            merged.push(id);
+            existing.add(id);
+          }
+        }
+        v.sourceMessageIds = merged;
+      })
+    );
+  }
+
+  // Backfill customer-inquiry sourceMessageId from the cache. The model
+  // sometimes provides subject + from + date but not the actual id. We
+  // resolve by querying the customer-kind partition for matching from,
+  // then fall back to kb_semantic_search when the cited `from` is generic
+  // ("Customer (unknown)", "A customer", etc.) or yields nothing.
+  if (safe.customerInquiries && safe.customerInquiries.length > 0) {
+    const isGenericFrom = (s: string): boolean => {
+      const lower = s.toLowerCase().trim();
+      if (!lower) return true;
+      // No real email address present and looks like a placeholder
+      const hasEmail = /[\w.+-]+@[\w.-]+/.test(lower);
+      if (hasEmail) return false;
+      return (
+        lower.includes('unknown') ||
+        lower.includes('placeholder') ||
+        lower.includes('redacted') ||
+        lower.includes('various') ||
+        lower === 'customer' ||
+        lower === 'a customer' ||
+        lower.startsWith('customer (') ||
+        lower.startsWith('customer -')
+      );
+    };
+
+    await Promise.all(
+      safe.customerInquiries.map(async (c) => {
+        if (c.sourceMessageId && isLikelyGmailId(c.sourceMessageId)) return;
+        const fromHeader = (c.from ?? '').trim();
+        const subject = (c.subject ?? '').trim();
+        const summary = (c.summary ?? '').trim();
+        const dateOnly = (c.date ?? '').trim();
+        if (!fromHeader && !subject && !summary) return;
+
+        // Search a ~14-day window around the cited date if present, else
+        // the last 60 days.
+        let since: string;
+        let until: string | undefined;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(dateOnly)) {
+          const d = new Date(dateOnly + 'T12:00:00Z');
+          const before = new Date(d.getTime() - 7 * 86400 * 1000);
+          const after = new Date(d.getTime() + 7 * 86400 * 1000);
+          since = before.toISOString().slice(0, 10);
+          until = after.toISOString().slice(0, 10);
+        } else {
+          since = new Date(Date.now() - 60 * 86400 * 1000)
+            .toISOString()
+            .slice(0, 10);
+        }
+
+        // First try: cache_query by sender (only useful when `from` is real).
+        if (!isGenericFrom(fromHeader)) {
+          try {
+            const fromHint =
+              fromHeader.match(/<([^>]+)>/)?.[1] ?? fromHeader;
+            let res = await cacheQuery({
+              kind: 'customer',
+              from: fromHint,
+              since,
+              ...(until ? { until } : {}),
+              limit: 5,
+            });
+            if (res.rows.length === 0) {
+              res = await cacheQuery({
+                from: fromHint,
+                since,
+                ...(until ? { until } : {}),
+                limit: 5,
+              });
+            }
+            const subjLower = subject.toLowerCase();
+            const best =
+              (subjLower
+                ? res.rows.find((r) =>
+                    (r.subject ?? '').toLowerCase().includes(subjLower.slice(0, 30))
+                  )
+                : null) ?? res.rows[0];
+            if (best && isLikelyGmailId(best.id)) {
+              c.sourceMessageId = best.id;
+              return;
+            }
+          } catch (err) {
+            console.warn(
+              `customer-inquiry cache_query failed for ${fromHeader}: ${(err as Error).message}`
+            );
+          }
+        }
+
+        // Fallback: semantic search over message bodies. Use subject +
+        // summary as the query — kb_semantic_search will find the actual
+        // customer email even when the model reported a generic `from`.
+        const query = [subject, summary].filter(Boolean).join(' — ').trim();
+        if (!query) return;
         try {
-          const res = await cacheQuery({ vendor: brand, since, limit: 6 });
-          const cachedIds = res.rows.map((r) => r.id).filter(isLikelyGmailId);
-          // Merge: keep model-cited ids first, then add fresh cached ids
-          // we don't already have. Cap at 6 to keep the chip row tidy.
-          const existing = new Set(v.sourceMessageIds ?? []);
-          const merged = [...(v.sourceMessageIds ?? [])];
+          const hits = await vectorKbSearch(query, 8);
+          // Prefer hits classified as customer-kind, then any non-vendor.
+          const ranked = [
+            ...hits.filter((h) => h.kind === 'customer'),
+            ...hits.filter((h) => h.kind !== 'customer' && h.kind !== 'vendor'),
+            ...hits,
+          ];
+          const seen = new Set<string>();
+          for (const h of ranked) {
+            if (seen.has(h.messageId)) continue;
+            seen.add(h.messageId);
+            if (isLikelyGmailId(h.messageId)) {
+              c.sourceMessageId = h.messageId;
+              // Also upgrade the displayed from/subject to the real ones
+              // when the model provided a generic placeholder.
+              if (isGenericFrom(fromHeader) && h.from) {
+                c.from = h.from;
+              }
+              if (!subject && h.subject) {
+                c.subject = h.subject;
+              }
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `customer-inquiry kb_semantic_search failed: ${(err as Error).message}`
+          );
+        }
+      })
+    );
+  }
+
+  // Backfill follow-up sourceMessageIds via semantic search over the
+  // cache. Follow-ups don't have a specific brand or sender, but they DO
+  // have a title + "why" that's perfect for kb_semantic_search.
+  if (safe.followUpsNeeded && safe.followUpsNeeded.length > 0) {
+    await Promise.all(
+      safe.followUpsNeeded.map(async (f) => {
+        if ((f.sourceMessageIds?.length ?? 0) >= 1) return;
+        const query = [f.title, f.why, f.suggestedAction]
+          .filter(Boolean)
+          .join(' — ')
+          .trim();
+        if (!query) return;
+        try {
+          const hits = await vectorKbSearch(query, 4);
+          const cachedIds = hits.map((h) => h.messageId).filter(isLikelyGmailId);
+          if (cachedIds.length === 0) return;
+          const existing = new Set(f.sourceMessageIds ?? []);
+          const merged = [...(f.sourceMessageIds ?? [])];
           for (const id of cachedIds) {
-            if (merged.length >= 6) break;
+            if (merged.length >= 4) break;
             if (!existing.has(id)) {
               merged.push(id);
               existing.add(id);
             }
           }
-          v.sourceMessageIds = merged;
+          f.sourceMessageIds = merged;
         } catch (err) {
           console.warn(
-            `vendor backfill failed for ${brand}: ${(err as Error).message}`
+            `follow-up backfill failed for "${f.title}": ${(err as Error).message}`
           );
         }
       })
