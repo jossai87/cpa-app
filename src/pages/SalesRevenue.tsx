@@ -2665,6 +2665,11 @@ export default function SalesRevenue() {
                     </div>
                   )}
 
+                  {/* Vendor Health — Purchasing only, immediately under the
+                      Open / Pending Orders table so the team sees brand
+                      momentum + inbox activity in one scroll. */}
+                  {showPurchasing && <VendorHealthCard />}
+
                   {/* Vendor / Order stat cards removed — counts now live on the
                       Open / Pending Orders header (Purchasing tab) and the
                       Vendor Directory header (Vendors tab). */}
@@ -3267,7 +3272,8 @@ export default function SalesRevenue() {
                 </>
               );
             })()}
-            {tab === 'purchasing' && <VendorHealthCard />}
+            {/* VendorHealthCard moved inside the IIFE above so it sits
+                directly under Open / Pending Orders. */}
           </div>
         )}
 
