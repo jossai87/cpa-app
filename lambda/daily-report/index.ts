@@ -967,7 +967,7 @@ export const handler = async (event?: { trigger?: string }) => {
 
     if (stopReason === 'tool_use') {
       const toolUseBlocks = assistantContent.filter((b) => 'toolUse' in b);
-      const toolResults: ToolResultContentBlock[] = await Promise.all(
+      const toolResults = (await Promise.all(
         toolUseBlocks.map(async (block) => {
           if (!('toolUse' in block) || !block.toolUse) {
             return { toolResult: { toolUseId: 'unknown', content: [{ text: 'Invalid tool call' }] } };
@@ -981,7 +981,7 @@ export const handler = async (event?: { trigger?: string }) => {
             return { toolResult: { toolUseId: toolUseId ?? '', content: [{ text: `Error: ${(err as Error).message}` }], status: 'error' as const } };
           }
         })
-      );
+      )) as unknown as ToolResultContentBlock[];
       messages.push({ role: 'user', content: toolResults as ContentBlock[] });
       continue;
     }

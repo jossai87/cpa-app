@@ -514,6 +514,12 @@ export class FootSolutionsStack extends Stack {
         allowOrigins: [
           `https://${CUSTOM_DOMAIN}`,
           `https://${CUSTOM_DOMAIN_ALT}`,
+          // CloudFront distribution domain — used when custom domain isn't yet
+          // pointed at CloudFront or during development/testing.
+          `https://${distribution.distributionDomainName}`,
+          // Local dev
+          'http://localhost:3000',
+          'http://localhost:5173',
         ],
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
