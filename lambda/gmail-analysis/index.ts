@@ -922,6 +922,45 @@ async function annotateAnalysisWithThreadIds(safe: CachedAnalysis): Promise<void
     if (c.sourceMessageId && !isLikelyGmailId(c.sourceMessageId)) c.sourceMessageId = '';
   for (const f of safe.followUpsNeeded ?? []) f.sourceMessageIds = sanitizeIds(f.sourceMessageIds);
 
+  // Backfill vendor sourceMessageIds from the cache. The model is
+  // inconsistent about citing every vendor email; the canonical
+  // GMAIL#VENDOR#<slug>#<date>#<id> index gives us a deterministic source
+  // of truth. We prepend up to 6 recent cached ids for any vendor that
+  // came back with fewer than 3 valid ids — keeping any model-cited ids
+  // first so the most relevant threads (per the model) lead.
+  if (safe.vendors && safe.vendors.length > 0) {
+    const since = new Date(Date.now() - safe.rangeDays * 86400 * 1000)
+      .toISOString()
+      .slice(0, 10);
+    await Promise.all(
+      safe.vendors.map(async (v) => {
+        if ((v.sourceMessageIds?.length ?? 0) >= 3) return;
+        const brand = (v.name ?? '').trim();
+        if (!brand) return;
+        try {
+          const res = await cacheQuery({ vendor: brand, since, limit: 6 });
+          const cachedIds = res.rows.map((r) => r.id).filter(isLikelyGmailId);
+          // Merge: keep model-cited ids first, then add fresh cached ids
+          // we don't already have. Cap at 6 to keep the chip row tidy.
+          const existing = new Set(v.sourceMessageIds ?? []);
+          const merged = [...(v.sourceMessageIds ?? [])];
+          for (const id of cachedIds) {
+            if (merged.length >= 6) break;
+            if (!existing.has(id)) {
+              merged.push(id);
+              existing.add(id);
+            }
+          }
+          v.sourceMessageIds = merged;
+        } catch (err) {
+          console.warn(
+            `vendor backfill failed for ${brand}: ${(err as Error).message}`
+          );
+        }
+      })
+    );
+  }
+
   const allIds = new Set<string>();
   for (const e of safe.events ?? []) for (const id of e.sourceMessageIds ?? []) allIds.add(id);
   for (const v of safe.vendors ?? []) for (const id of v.sourceMessageIds ?? []) allIds.add(id);

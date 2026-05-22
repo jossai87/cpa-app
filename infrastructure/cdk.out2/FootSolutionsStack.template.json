@@ -5190,7 +5190,7 @@
    "Properties": {
     "Code": {
      "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
-     "S3Key": "686f0d426e9dfded4d40f5745c37dc6ec29bc411315cff14393c93f69e285a4a.zip"
+     "S3Key": "78407bd19c927482cf6cf29861fb8819061bb0811478ecc75755b9ce06ec6ae9.zip"
     },
     "Description": "Gmail Analysis: structured digest + agentic chat grounded in the owner's inbox",
     "Environment": {
@@ -5249,7 +5249,7 @@
    ],
    "Metadata": {
     "aws:cdk:path": "FootSolutionsStack/GmailAnalysisHandler/Resource",
-    "aws:asset:path": "asset.686f0d426e9dfded4d40f5745c37dc6ec29bc411315cff14393c93f69e285a4a",
+    "aws:asset:path": "asset.78407bd19c927482cf6cf29861fb8819061bb0811478ecc75755b9ce06ec6ae9",
     "aws:asset:is-bundled": true,
     "aws:asset:property": "Code"
    }
