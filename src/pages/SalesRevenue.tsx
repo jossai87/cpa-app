@@ -1137,17 +1137,17 @@ export default function SalesRevenue() {
   }
 
   const SALES_SUBTABS: Array<{ id: Tab; label: string; icon: React.ElementType }> = [
-    { id: 'purchasing', label: 'Purchasing', icon: ShoppingBag },
-    { id: 'inventory', label: 'Inventory', icon: Package },
     { id: 'vendors', label: 'Vendors', icon: Users },
+    { id: 'inventory', label: 'Inventory', icon: Package },
+    { id: 'purchasing', label: 'Purchasing', icon: ShoppingBag },
   ];
   const isSalesTab = SALES_SUBTABS.some((s) => s.id === tab);
 
   const tabs: Array<{ id: Tab; label: string; icon: React.ElementType; isParent?: boolean; childOf?: 'sales' }> = [
     { id: 'overview', label: 'Overview', icon: TrendingUp },
-    // "Sales" is a parent tab whose default child is Purchasing. Clicking
-    // it routes to the last-used Sales child (or Purchasing on first visit).
-    { id: 'purchasing', label: 'Sales', icon: ShoppingBag, isParent: true, childOf: 'sales' },
+    // "Sales" is a parent tab whose default child is Vendors. Clicking
+    // it routes the user to the Vendors sub-tab on first visit.
+    { id: 'vendors', label: 'Sales', icon: ShoppingBag, isParent: true, childOf: 'sales' },
     { id: 'analytics', label: 'Trends', icon: BarChart3Icon },
     { id: 'insights', label: 'Performance', icon: LightbulbIcon },
     { id: 'staff', label: 'Staff', icon: Users },

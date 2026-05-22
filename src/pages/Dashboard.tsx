@@ -25,7 +25,7 @@ const ALL_TILES = [
     visibilityKey: null,
   },
   {
-    title: 'Gmail Analysis',
+    title: 'Gmail Assistant',
     icon: Mail,
     href: '/gmail',
     active: true,
@@ -50,14 +50,14 @@ const ALL_TILES = [
     icon: Users,
     href: '/payroll',
     active: false,
-    visibilityKey: null,
+    visibilityKey: 'dashboard.tile.payroll' as const,
   },
   {
     title: 'Franchise Compliance',
     icon: ClipboardCheck,
     href: '/compliance',
     active: false,
-    visibilityKey: null,
+    visibilityKey: 'dashboard.tile.compliance' as const,
   },
 ];
 

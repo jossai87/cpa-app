@@ -8,8 +8,9 @@
  *
  * Visibility keys (use these in components):
  *   dashboard.tile.tax              — CPA Tax Assistant tile
- *   dashboard.tile.payroll          — Payroll tile (locked anyway)
- *   dashboard.tile.compliance       — Franchise Compliance tile (locked anyway)
+ *   dashboard.tile.gmail            — Gmail Assistant tile
+ *   dashboard.tile.payroll          — Payroll tile (Coming Soon)
+ *   dashboard.tile.compliance       — Franchise Compliance tile (Coming Soon)
  *   credentials.gmail-corporate     — Foot Solutions Corporate Gmail entry
  *   sales.tab.reporting             — Sales & Revenue Reporting tab
  *   sales.trends.totalRevenue       — Total Revenue stat card on Trends tab
@@ -29,7 +30,9 @@ export const ADMIN_EMAIL = 'jandoossai@gmail.com';
 /** All visibility keys + hardcoded defaults for non-admins. */
 export const VISIBILITY_KEYS = {
   'dashboard.tile.tax':            { label: 'Dashboard — CPA Tax Assistant tile',  defaultVisible: false },
-  'dashboard.tile.gmail':          { label: 'Dashboard — Gmail Analysis tile',     defaultVisible: true  },
+  'dashboard.tile.gmail':          { label: 'Dashboard — Gmail Assistant tile',    defaultVisible: true  },
+  'dashboard.tile.payroll':        { label: 'Dashboard — Payroll tile (Coming Soon)', defaultVisible: false },
+  'dashboard.tile.compliance':     { label: 'Dashboard — Franchise Compliance tile (Coming Soon)', defaultVisible: false },
   'credentials.gmail-corporate':   { label: 'Credentials — Foot Solutions Corporate Gmail', defaultVisible: false },
   'sales.tab.reporting':           { label: 'Sales & Revenue — Reporting tab',     defaultVisible: false },
   'sales.trends.totalRevenue':     { label: 'Sales & Revenue — Total Revenue (Trends tab)', defaultVisible: false },
