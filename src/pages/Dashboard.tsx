@@ -113,27 +113,28 @@ export default function Dashboard() {
         </div>
       </header>
 
-      {/* Two-column layout: tiles on left, email feed on right */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-          {/* Tile grid */}
-          <div
-            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-5 self-start"
-            role="list"
-            aria-label="Management modules"
-          >
-            {tiles.map((tile) => (
-              <TileCard
-                key={tile.title}
-                title={tile.title}
-                icon={tile.icon}
-                href={tile.href}
-                active={tile.active}
-              />
-            ))}
-          </div>
+      {/* Single-column layout: tiles on top (full width), email feed
+          centered below. Gives Daily Briefings more reading width. */}
+      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+        {/* Tile grid */}
+        <div
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5"
+          role="list"
+          aria-label="Management modules"
+        >
+          {tiles.map((tile) => (
+            <TileCard
+              key={tile.title}
+              title={tile.title}
+              icon={tile.icon}
+              href={tile.href}
+              active={tile.active}
+            />
+          ))}
+        </div>
 
-          {/* Email feed */}
+        {/* Email feed — centered, capped width for readability */}
+        <div className="max-w-3xl mx-auto">
           <EmailFeed />
         </div>
       </main>

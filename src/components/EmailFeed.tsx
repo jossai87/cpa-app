@@ -23,13 +23,6 @@ interface EmailRecord {
   generatedAt: string;
 }
 
-const statusBadge: Record<EmailRecord['status'], { label: string; cls: string }> = {
-  beat: { label: '🎯 Beat', cls: 'bg-emerald-100 text-emerald-700' },
-  miss: { label: '⚠️ Missed', cls: 'bg-red-100 text-red-700' },
-  pace: { label: '✓ On pace', cls: 'bg-blue-100 text-blue-700' },
-  none: { label: 'No sales', cls: 'bg-slate-100 text-slate-600' },
-};
-
 export default function EmailFeed() {
   const { isAdmin } = useAdmin();
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -63,7 +56,7 @@ export default function EmailFeed() {
 
   return (
     <>
-    <aside className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 180px)' }}>
+    <aside className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col" style={{ maxHeight: '70vh' }}>
       <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
         <Mail className="w-4 h-4 text-blue-500" />
         <h3 className="text-sm font-semibold text-slate-900 flex-1">Daily Briefings</h3>
@@ -104,7 +97,6 @@ export default function EmailFeed() {
         )}
         {emails.map((e) => {
           const isExpanded = expanded === e.date;
-          const badge = statusBadge[e.status] ?? statusBadge.pace;
           const dateLabel = new Date(e.date + 'T12:00:00').toLocaleDateString('en-US', {
             timeZone: 'America/Chicago', month: 'short', day: 'numeric',
           });
@@ -121,7 +113,6 @@ export default function EmailFeed() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-xs font-medium text-slate-700">{dateLabel}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${badge.cls}`}>{badge.label}</span>
                     {e.sendStatus === 'failed' && (
                       <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">Send failed</span>
                     )}
