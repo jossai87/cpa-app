@@ -1,0 +1,6437 @@
+{
+ "Description": "Foot Solutions Management Platform — Phase 1 MVP",
+ "Resources": {
+  "UserPool6BA7E5F2": {
+   "Type": "AWS::Cognito::UserPool",
+   "Properties": {
+    "AccountRecoverySetting": {
+     "RecoveryMechanisms": [
+      {
+       "Name": "verified_email",
+       "Priority": 1
+      }
+     ]
+    },
+    "AdminCreateUserConfig": {
+     "AllowAdminCreateUserOnly": true
+    },
+    "AutoVerifiedAttributes": [
+     "email"
+    ],
+    "EmailVerificationMessage": "The verification code to your new account is {####}",
+    "EmailVerificationSubject": "Verify your new account",
+    "Policies": {
+     "PasswordPolicy": {
+      "MinimumLength": 8,
+      "RequireLowercase": true,
+      "RequireNumbers": true,
+      "RequireSymbols": true,
+      "RequireUppercase": true
+     }
+    },
+    "SmsVerificationMessage": "The verification code to your new account is {####}",
+    "UserPoolName": "foot-solutions-user-pool",
+    "UserPoolTags": {
+     "Component": "auth",
+     "CostCenter": "foot-solutions-flowermound",
+     "Environment": "production",
+     "ManagedBy": "cdk",
+     "Owner": "flowermound@footsolutions.com",
+     "Project": "foot-solutions-platform"
+    },
+    "UsernameAttributes": [
+     "email"
+    ],
+    "VerificationMessageTemplate": {
+     "DefaultEmailOption": "CONFIRM_WITH_CODE",
+     "EmailMessage": "The verification code to your new account is {####}",
+     "EmailSubject": "Verify your new account",
+     "SmsMessage": "The verification code to your new account is {####}"
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/UserPool/Resource"
+   }
+  },
+  "UserPoolHostedUIDomain7F20EF9C": {
+   "Type": "AWS::Cognito::UserPoolDomain",
+   "Properties": {
+    "Domain": "foot-solutions-app",
+    "UserPoolId": {
+     "Ref": "UserPool6BA7E5F2"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/UserPool/HostedUIDomain/Resource"
+   }
+  },
+  "UserPoolWebClient4C9370B0": {
+   "Type": "AWS::Cognito::UserPoolClient",
+   "Properties": {
+    "AllowedOAuthFlows": [
+     "code"
+    ],
+    "AllowedOAuthFlowsUserPoolClient": true,
+    "AllowedOAuthScopes": [
+     "openid",
+     "email"
+    ],
+    "CallbackURLs": [
+     "https://fsmanagementsystem.com/callback",
+     "https://www.fsmanagementsystem.com/callback"
+    ],
+    "ClientName": "foot-solutions-web-client",
+    "ExplicitAuthFlows": [
+     "ALLOW_USER_SRP_AUTH",
+     "ALLOW_REFRESH_TOKEN_AUTH"
+    ],
+    "GenerateSecret": false,
+    "LogoutURLs": [
+     "https://fsmanagementsystem.com/",
+     "https://fsmanagementsystem.com/login",
+     "https://www.fsmanagementsystem.com/",
+     "https://www.fsmanagementsystem.com/login"
+    ],
+    "PreventUserExistenceErrors": "ENABLED",
+    "SupportedIdentityProviders": [
+     "COGNITO"
+    ],
+    "UserPoolId": {
+     "Ref": "UserPool6BA7E5F2"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/UserPool/WebClient/Resource"
+   }
+  },
+  "StaticBucket92253581": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "frontend"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/StaticBucket/Resource"
+   }
+  },
+  "StaticBucketPolicy4D0F6D8E": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "StaticBucket92253581"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "StaticBucket92253581",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "StaticBucket92253581",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:GetObject",
+       "Condition": {
+        "StringEquals": {
+         "AWS:SourceArn": {
+          "Fn::Join": [
+           "",
+           [
+            "arn:",
+            {
+             "Ref": "AWS::Partition"
+            },
+            ":cloudfront::",
+            {
+             "Ref": "AWS::AccountId"
+            },
+            ":distribution/",
+            {
+             "Ref": "Distribution830FAC52"
+            }
+           ]
+          ]
+         }
+        }
+       },
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "cloudfront.amazonaws.com"
+       },
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "StaticBucket92253581",
+            "Arn"
+           ]
+          },
+          "/*"
+         ]
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/StaticBucket/Policy/Resource"
+   }
+  },
+  "OAC5B452445": {
+   "Type": "AWS::CloudFront::OriginAccessControl",
+   "Properties": {
+    "OriginAccessControlConfig": {
+     "Description": "OAC for Foot Solutions static bucket",
+     "Name": "FootSolutionsStackOAC1700FE0C",
+     "OriginAccessControlOriginType": "s3",
+     "SigningBehavior": "always",
+     "SigningProtocol": "sigv4"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/OAC/Resource"
+   }
+  },
+  "Distribution830FAC52": {
+   "Type": "AWS::CloudFront::Distribution",
+   "Properties": {
+    "DistributionConfig": {
+     "Aliases": [
+      "fsmanagementsystem.com",
+      "www.fsmanagementsystem.com"
+     ],
+     "CacheBehaviors": [
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": true,
+       "PathPattern": "*.js",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin2136326AD",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": true,
+       "PathPattern": "*.css",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin30057A8F1",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": false,
+       "PathPattern": "*.woff",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin4910FF294",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": false,
+       "PathPattern": "*.woff2",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin5E0FA8E02",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": false,
+       "PathPattern": "*.png",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin6BA89BE09",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": true,
+       "PathPattern": "*.svg",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin71ECADB26",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      },
+      {
+       "AllowedMethods": [
+        "GET",
+        "HEAD"
+       ],
+       "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+       "Compress": false,
+       "PathPattern": "*.ico",
+       "TargetOriginId": "FootSolutionsStackDistributionOrigin877989844",
+       "ViewerProtocolPolicy": "redirect-to-https"
+      }
+     ],
+     "CustomErrorResponses": [
+      {
+       "ErrorCachingMinTTL": 0,
+       "ErrorCode": 403,
+       "ResponseCode": 200,
+       "ResponsePagePath": "/index.html"
+      },
+      {
+       "ErrorCachingMinTTL": 0,
+       "ErrorCode": 404,
+       "ResponseCode": 200,
+       "ResponsePagePath": "/index.html"
+      }
+     ],
+     "DefaultCacheBehavior": {
+      "AllowedMethods": [
+       "GET",
+       "HEAD"
+      ],
+      "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+      "Compress": true,
+      "TargetOriginId": "FootSolutionsStackDistributionOrigin11F190180",
+      "ViewerProtocolPolicy": "redirect-to-https"
+     },
+     "Enabled": true,
+     "HttpVersion": "http2",
+     "IPV6Enabled": true,
+     "Origins": [
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin11F190180",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin2136326AD",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin30057A8F1",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin4910FF294",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin5E0FA8E02",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin6BA89BE09",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin71ECADB26",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      },
+      {
+       "DomainName": {
+        "Fn::GetAtt": [
+         "StaticBucket92253581",
+         "RegionalDomainName"
+        ]
+       },
+       "Id": "FootSolutionsStackDistributionOrigin877989844",
+       "OriginAccessControlId": {
+        "Fn::GetAtt": [
+         "OAC5B452445",
+         "Id"
+        ]
+       },
+       "S3OriginConfig": {
+        "OriginAccessIdentity": ""
+       }
+      }
+     ],
+     "ViewerCertificate": {
+      "AcmCertificateArn": "arn:aws:acm:us-east-1:558985210319:certificate/619356b6-ac75-494b-8f9a-6ba46e2386be",
+      "MinimumProtocolVersion": "TLSv1.2_2021",
+      "SslSupportMethod": "sni-only"
+     }
+    },
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "frontend"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/Distribution/Resource"
+   }
+  },
+  "AliasApexD7F33507": {
+   "Type": "AWS::Route53::RecordSet",
+   "Properties": {
+    "AliasTarget": {
+     "DNSName": {
+      "Fn::GetAtt": [
+       "Distribution830FAC52",
+       "DomainName"
+      ]
+     },
+     "HostedZoneId": {
+      "Fn::FindInMap": [
+       "AWSCloudFrontPartitionHostedZoneIdMap",
+       {
+        "Ref": "AWS::Partition"
+       },
+       "zoneId"
+      ]
+     }
+    },
+    "HostedZoneId": "Z0341623D3YSWQ21OYVP",
+    "Name": "fsmanagementsystem.com.",
+    "Type": "A"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/AliasApex/Resource"
+   }
+  },
+  "AliasApexAAAAF392B272": {
+   "Type": "AWS::Route53::RecordSet",
+   "Properties": {
+    "AliasTarget": {
+     "DNSName": {
+      "Fn::GetAtt": [
+       "Distribution830FAC52",
+       "DomainName"
+      ]
+     },
+     "HostedZoneId": {
+      "Fn::FindInMap": [
+       "AWSCloudFrontPartitionHostedZoneIdMap",
+       {
+        "Ref": "AWS::Partition"
+       },
+       "zoneId"
+      ]
+     }
+    },
+    "HostedZoneId": "Z0341623D3YSWQ21OYVP",
+    "Name": "fsmanagementsystem.com.",
+    "Type": "AAAA"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/AliasApexAAAA/Resource"
+   }
+  },
+  "AliasWww97850DC4": {
+   "Type": "AWS::Route53::RecordSet",
+   "Properties": {
+    "AliasTarget": {
+     "DNSName": {
+      "Fn::GetAtt": [
+       "Distribution830FAC52",
+       "DomainName"
+      ]
+     },
+     "HostedZoneId": {
+      "Fn::FindInMap": [
+       "AWSCloudFrontPartitionHostedZoneIdMap",
+       {
+        "Ref": "AWS::Partition"
+       },
+       "zoneId"
+      ]
+     }
+    },
+    "HostedZoneId": "Z0341623D3YSWQ21OYVP",
+    "Name": "www.fsmanagementsystem.com.",
+    "Type": "A"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/AliasWww/Resource"
+   }
+  },
+  "AliasWwwAAAA29743FFB": {
+   "Type": "AWS::Route53::RecordSet",
+   "Properties": {
+    "AliasTarget": {
+     "DNSName": {
+      "Fn::GetAtt": [
+       "Distribution830FAC52",
+       "DomainName"
+      ]
+     },
+     "HostedZoneId": {
+      "Fn::FindInMap": [
+       "AWSCloudFrontPartitionHostedZoneIdMap",
+       {
+        "Ref": "AWS::Partition"
+       },
+       "zoneId"
+      ]
+     }
+    },
+    "HostedZoneId": "Z0341623D3YSWQ21OYVP",
+    "Name": "www.fsmanagementsystem.com.",
+    "Type": "AAAA"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/AliasWwwAAAA/Resource"
+   }
+  },
+  "AppTable815C50BC": {
+   "Type": "AWS::DynamoDB::Table",
+   "Properties": {
+    "AttributeDefinitions": [
+     {
+      "AttributeName": "userId",
+      "AttributeType": "S"
+     },
+     {
+      "AttributeName": "sk",
+      "AttributeType": "S"
+     }
+    ],
+    "BillingMode": "PAY_PER_REQUEST",
+    "KeySchema": [
+     {
+      "AttributeName": "userId",
+      "KeyType": "HASH"
+     },
+     {
+      "AttributeName": "sk",
+      "KeyType": "RANGE"
+     }
+    ],
+    "PointInTimeRecoverySpecification": {
+     "PointInTimeRecoveryEnabled": true
+    },
+    "TableName": "FootSolutionsApp",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "data"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "TimeToLiveSpecification": {
+     "AttributeName": "ttl",
+     "Enabled": true
+    }
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/AppTable/Resource"
+   }
+  },
+  "DocsBucketECEA003F": {
+   "Type": "AWS::S3::Bucket",
+   "Properties": {
+    "BucketEncryption": {
+     "ServerSideEncryptionConfiguration": [
+      {
+       "ServerSideEncryptionByDefault": {
+        "SSEAlgorithm": "AES256"
+       }
+      }
+     ]
+    },
+    "CorsConfiguration": {
+     "CorsRules": [
+      {
+       "AllowedHeaders": [
+        "*"
+       ],
+       "AllowedMethods": [
+        "PUT",
+        "GET",
+        "HEAD"
+       ],
+       "AllowedOrigins": [
+        "*"
+       ],
+       "ExposedHeaders": [
+        "ETag"
+       ],
+       "MaxAge": 3000
+      }
+     ]
+    },
+    "LifecycleConfiguration": {
+     "Rules": [
+      {
+       "ExpirationInDays": 90,
+       "Status": "Enabled"
+      }
+     ]
+    },
+    "PublicAccessBlockConfiguration": {
+     "BlockPublicAcls": true,
+     "BlockPublicPolicy": true,
+     "IgnorePublicAcls": true,
+     "RestrictPublicBuckets": true
+    },
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "documents"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Retain",
+   "DeletionPolicy": "Retain",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DocsBucket/Resource"
+   }
+  },
+  "DocsBucketPolicy7BCF1FB7": {
+   "Type": "AWS::S3::BucketPolicy",
+   "Properties": {
+    "Bucket": {
+     "Ref": "DocsBucketECEA003F"
+    },
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "s3:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DocsBucketECEA003F",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DocsBucketECEA003F",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DocsBucket/Policy/Resource"
+   }
+  },
+  "TaxHandlerServiceRole2763F4A9": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-tax-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/TaxHandler/ServiceRole/Resource"
+   }
+  },
+  "TaxHandlerServiceRoleDefaultPolicyBA5360C1": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "bedrock:InvokeModel",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0"
+       ],
+       "Sid": "BedrockInvokeModel"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "TaxHandlerServiceRoleDefaultPolicyBA5360C1",
+    "Roles": [
+     {
+      "Ref": "TaxHandlerServiceRole2763F4A9"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/TaxHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "TaxHandler85466C28": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "a6c8cf1a09763a89277d12b9dfc11961dc59cfbf04c65575f8ad5c9ab98d617e.zip"
+    },
+    "Description": "Handles tax calculation, Bedrock invocation, and DynamoDB session persistence",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "BEDROCK_MODEL_ID": "us.amazon.nova-2-lite-v1:0"
+     }
+    },
+    "FunctionName": "foot-solutions-tax-handler",
+    "Handler": "index.handler",
+    "MemorySize": 256,
+    "Role": {
+     "Fn::GetAtt": [
+      "TaxHandlerServiceRole2763F4A9",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-tax-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 30
+   },
+   "DependsOn": [
+    "TaxHandlerServiceRoleDefaultPolicyBA5360C1",
+    "TaxHandlerServiceRole2763F4A9"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/TaxHandler/Resource",
+    "aws:asset:path": "asset.a6c8cf1a09763a89277d12b9dfc11961dc59cfbf04c65575f8ad5c9ab98d617e",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "CredentialHandlerServiceRole01E613C9": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "credentials"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/CredentialHandler/ServiceRole/Resource"
+   }
+  },
+  "CredentialHandlerServiceRoleDefaultPolicy9E18B6C6": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:CreateSecret"
+       ],
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/credentials/*",
+       "Sid": "SecretsManagerCredentials"
+      },
+      {
+       "Action": "secretsmanager:ListSecrets",
+       "Effect": "Allow",
+       "Resource": "*",
+       "Sid": "SecretsManagerList"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "CredentialHandlerServiceRoleDefaultPolicy9E18B6C6",
+    "Roles": [
+     {
+      "Ref": "CredentialHandlerServiceRole01E613C9"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/CredentialHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "CredentialHandlerD61EA449": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "f19fd4515ecbf850e2191d9463ef36c1deac348399618e73e7d2fb701d0372c5.zip"
+    },
+    "Description": "Handles Secrets Manager CRUD for the Credential Vault",
+    "Environment": {
+     "Variables": {
+      "SECRET_PATH_PREFIX": "foot-solutions/credentials/",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED": "true",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_SIZE": "10"
+     }
+    },
+    "FunctionName": "foot-solutions-credential-handler",
+    "Handler": "index.handler",
+    "Layers": [
+     "arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:11"
+    ],
+    "MemorySize": 128,
+    "Role": {
+     "Fn::GetAtt": [
+      "CredentialHandlerServiceRole01E613C9",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "credentials"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 10
+   },
+   "DependsOn": [
+    "CredentialHandlerServiceRoleDefaultPolicy9E18B6C6",
+    "CredentialHandlerServiceRole01E613C9"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/CredentialHandler/Resource",
+    "aws:asset:path": "asset.f19fd4515ecbf850e2191d9463ef36c1deac348399618e73e7d2fb701d0372c5",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "DocumentHandlerServiceRole09842811": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-extraction"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DocumentHandler/ServiceRole/Resource"
+   }
+  },
+  "DocumentHandlerServiceRoleDefaultPolicy83ADEE0A": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "s3:GetObject*",
+        "s3:GetBucket*",
+        "s3:List*",
+        "s3:DeleteObject*",
+        "s3:PutObject",
+        "s3:PutObjectLegalHold",
+        "s3:PutObjectRetention",
+        "s3:PutObjectTagging",
+        "s3:PutObjectVersionTagging",
+        "s3:Abort*"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DocsBucketECEA003F",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DocsBucketECEA003F",
+             "Arn"
+            ]
+           },
+           "/*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "s3:DeleteObject*",
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::Join": [
+         "",
+         [
+          {
+           "Fn::GetAtt": [
+            "DocsBucketECEA003F",
+            "Arn"
+           ]
+          },
+          "/*"
+         ]
+        ]
+       }
+      },
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "bedrock:InvokeModel",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+       ],
+       "Sid": "BedrockInvokeModelForExtraction"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "DocumentHandlerServiceRoleDefaultPolicy83ADEE0A",
+    "Roles": [
+     {
+      "Ref": "DocumentHandlerServiceRole09842811"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DocumentHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "DocumentHandlerC2057DD1": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "0050e1c9b9e28f5c9a06ee3c6b85c152552ecdfa4da42b285d193cd652a3f2e1.zip"
+    },
+    "Description": "Handles document upload (pre-signed URLs) and Bedrock-powered field extraction",
+    "Environment": {
+     "Variables": {
+      "DOCS_BUCKET": {
+       "Ref": "DocsBucketECEA003F"
+      },
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "BEDROCK_MODEL_ID": "us.amazon.nova-2-lite-v1:0",
+      "BEDROCK_PRO_MODEL_ID": "us.amazon.nova-pro-v1:0"
+     }
+    },
+    "FunctionName": "foot-solutions-document-handler",
+    "Handler": "index.handler",
+    "MemorySize": 512,
+    "Role": {
+     "Fn::GetAtt": [
+      "DocumentHandlerServiceRole09842811",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-extraction"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 60
+   },
+   "DependsOn": [
+    "DocumentHandlerServiceRoleDefaultPolicy83ADEE0A",
+    "DocumentHandlerServiceRole09842811"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DocumentHandler/Resource",
+    "aws:asset:path": "asset.0050e1c9b9e28f5c9a06ee3c6b85c152552ecdfa4da42b285d193cd652a3f2e1",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "HeartlandHandlerServiceRole1B868A28": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "pos-integration"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandHandler/ServiceRole/Resource"
+   }
+  },
+  "HeartlandHandlerServiceRoleDefaultPolicyE90E52D5": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/heartland/*",
+       "Sid": "HeartlandTokenRead"
+      },
+      {
+       "Action": "lambda:InvokeFunction",
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "HeartlandSyncHandler39B5AC81",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "HeartlandSyncHandler39B5AC81",
+             "Arn"
+            ]
+           },
+           ":*"
+          ]
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "lambda:InvokeFunction",
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "DailyReportHandlerB6040060",
+          "Arn"
+         ]
+        },
+        {
+         "Fn::Join": [
+          "",
+          [
+           {
+            "Fn::GetAtt": [
+             "DailyReportHandlerB6040060",
+             "Arn"
+            ]
+           },
+           ":*"
+          ]
+         ]
+        }
+       ]
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "HeartlandHandlerServiceRoleDefaultPolicyE90E52D5",
+    "Roles": [
+     {
+      "Ref": "HeartlandHandlerServiceRole1B868A28"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "HeartlandHandlerB43C85E0": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "bd458053135f8c848d54468a11e35480b4b212840534cefadcb5b0e5decfbf30.zip"
+    },
+    "Description": "Heartland Retail POS user-facing read-only handler — reads from cache only",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "SYNC_FUNCTION_NAME": "foot-solutions-pos-sync",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED": "true",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_SIZE": "10",
+      "DAILY_REPORT_FUNCTION_NAME": {
+       "Ref": "DailyReportHandlerB6040060"
+      }
+     }
+    },
+    "FunctionName": "foot-solutions-heartland-handler",
+    "Handler": "index.handler",
+    "Layers": [
+     "arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:11"
+    ],
+    "MemorySize": 256,
+    "Role": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerServiceRole1B868A28",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "pos-integration"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 60
+   },
+   "DependsOn": [
+    "HeartlandHandlerServiceRoleDefaultPolicyE90E52D5",
+    "HeartlandHandlerServiceRole1B868A28"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandHandler/Resource",
+    "aws:asset:path": "asset.bd458053135f8c848d54468a11e35480b4b212840534cefadcb5b0e5decfbf30",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "HeartlandSyncHandlerServiceRole38CA5177": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "pos-integration"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandSyncHandler/ServiceRole/Resource"
+   }
+  },
+  "HeartlandSyncHandlerServiceRoleDefaultPolicy336F3209": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/heartland/*",
+       "Sid": "HeartlandSyncTokenRead"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "HeartlandSyncHandlerServiceRoleDefaultPolicy336F3209",
+    "Roles": [
+     {
+      "Ref": "HeartlandSyncHandlerServiceRole38CA5177"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandSyncHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "HeartlandSyncHandler39B5AC81": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "32d7132cb76b1e5cf143b6be4a7b149fdb37531b3af49226b9a3b78bf073424f.zip"
+    },
+    "Description": "Heartland POS background sync — runs every 6h via EventBridge, populates DynamoDB cache",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED": "true",
+      "PARAMETERS_SECRETS_EXTENSION_CACHE_SIZE": "10"
+     }
+    },
+    "FunctionName": "foot-solutions-pos-sync",
+    "Handler": "index.handler",
+    "Layers": [
+     "arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:11"
+    ],
+    "MemorySize": 1024,
+    "Role": {
+     "Fn::GetAtt": [
+      "HeartlandSyncHandlerServiceRole38CA5177",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "pos-integration"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 300
+   },
+   "DependsOn": [
+    "HeartlandSyncHandlerServiceRoleDefaultPolicy336F3209",
+    "HeartlandSyncHandlerServiceRole38CA5177"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandSyncHandler/Resource",
+    "aws:asset:path": "asset.32d7132cb76b1e5cf143b6be4a7b149fdb37531b3af49226b9a3b78bf073424f",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "HeartlandSyncScheduleE2B5F638": {
+   "Type": "AWS::Events::Rule",
+   "Properties": {
+    "Description": "Run Heartland POS sync every 6 hours",
+    "ScheduleExpression": "rate(6 hours)",
+    "State": "ENABLED",
+    "Tags": [
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Targets": [
+     {
+      "Arn": {
+       "Fn::GetAtt": [
+        "HeartlandSyncHandler39B5AC81",
+        "Arn"
+       ]
+      },
+      "Id": "Target0"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandSyncSchedule/Resource"
+   }
+  },
+  "HeartlandSyncScheduleAllowEventRuleFootSolutionsStackHeartlandSyncHandler1B3C9404A0266723": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandSyncHandler39B5AC81",
+      "Arn"
+     ]
+    },
+    "Principal": "events.amazonaws.com",
+    "SourceArn": {
+     "Fn::GetAtt": [
+      "HeartlandSyncScheduleE2B5F638",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HeartlandSyncSchedule/AllowEventRuleFootSolutionsStackHeartlandSyncHandler1B3C9404"
+   }
+  },
+  "HttpApiF5A9A8A7": {
+   "Type": "AWS::ApiGatewayV2::Api",
+   "Properties": {
+    "CorsConfiguration": {
+     "AllowHeaders": [
+      "Authorization",
+      "Content-Type"
+     ],
+     "AllowMethods": [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "OPTIONS"
+     ],
+     "AllowOrigins": [
+      "https://fsmanagementsystem.com",
+      "https://www.fsmanagementsystem.com"
+     ],
+     "MaxAge": 300
+    },
+    "Description": "Foot Solutions Management Platform HTTP API",
+    "Name": "foot-solutions-api",
+    "ProtocolType": "HTTP",
+    "Tags": {
+     "Component": "api",
+     "CostCenter": "foot-solutions-flowermound",
+     "Environment": "production",
+     "ManagedBy": "cdk",
+     "Owner": "flowermound@footsolutions.com",
+     "Project": "foot-solutions-platform"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/Resource"
+   }
+  },
+  "HttpApiDefaultStage3EEB07D6": {
+   "Type": "AWS::ApiGatewayV2::Stage",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AutoDeploy": true,
+    "StageName": "$default",
+    "Tags": {
+     "Component": "api",
+     "CostCenter": "foot-solutions-flowermound",
+     "Environment": "production",
+     "ManagedBy": "cdk",
+     "Owner": "flowermound@footsolutions.com",
+     "Project": "foot-solutions-platform"
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DefaultStage/Resource"
+   }
+  },
+  "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "TaxHandler85466C28",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--tax--calculate/TaxIntegration/Resource"
+   }
+  },
+  "HttpApiPOSTtaxcalculateTaxIntegrationPermissionCE74F770": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "TaxHandler85466C28",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/tax/calculate"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--tax--calculate/TaxIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTtaxcalculate1904DA01": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /tax/calculate",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--tax--calculate/Resource"
+   }
+  },
+  "HttpApiCognitoAuthorizer935FA0F6": {
+   "Type": "AWS::ApiGatewayV2::Authorizer",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizerType": "JWT",
+    "IdentitySource": [
+     "$request.header.Authorization"
+    ],
+    "JwtConfiguration": {
+     "Audience": [
+      {
+       "Ref": "UserPoolWebClient4C9370B0"
+      }
+     ],
+     "Issuer": {
+      "Fn::Join": [
+       "",
+       [
+        "https://cognito-idp.us-east-1.amazonaws.com/",
+        {
+         "Ref": "UserPool6BA7E5F2"
+        }
+       ]
+      ]
+     }
+    },
+    "Name": "CognitoJwtAuthorizer"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/CognitoAuthorizer/Resource"
+   }
+  },
+  "HttpApiGETtaxhistoryTaxIntegrationPermissionD5275AD9": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "TaxHandler85466C28",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/tax/history"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--tax--history/TaxIntegration-Permission"
+   }
+  },
+  "HttpApiGETtaxhistoryADD4876D": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /tax/history",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--tax--history/Resource"
+   }
+  },
+  "HttpApiGETtaxhistoryidTaxIntegrationPermission51068ECB": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "TaxHandler85466C28",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/tax/history/{id}"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--tax--history--{id}/TaxIntegration-Permission"
+   }
+  },
+  "HttpApiGETtaxhistoryid889E6FDE": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /tax/history/{id}",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--tax--history--{id}/Resource"
+   }
+  },
+  "HttpApiDELETEtaxhistoryidTaxIntegrationPermissionBAE3EC2C": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "TaxHandler85466C28",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/tax/history/{id}"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--tax--history--{id}/TaxIntegration-Permission"
+   }
+  },
+  "HttpApiDELETEtaxhistoryid25B698CE": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "DELETE /tax/history/{id}",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTtaxcalculateTaxIntegration9A1B9219"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--tax--history--{id}/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--upload-url/DocIntegration/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsuploadurlDocIntegrationPermissionC342F447": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/upload-url"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--upload-url/DocIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTdocumentsuploadurl3E0199B6": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /documents/upload-url",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--upload-url/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsextractDocIntegrationPermission5EBDCA6D": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/extract"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--extract/DocIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTdocumentsextractFB7B4266": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /documents/extract",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--extract/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsbdajobDocIntegrationPermission164F752A": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/bda-job"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--bda-job/DocIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTdocumentsbdajob48AE6912": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /documents/bda-job",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--bda-job/Resource"
+   }
+  },
+  "HttpApiGETdocumentsDocIntegrationPermission4BB1622E": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--documents/DocIntegration-Permission"
+   }
+  },
+  "HttpApiGETdocumentsDDCDDB0B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /documents",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--documents/Resource"
+   }
+  },
+  "HttpApiGETdocumentsiddownloadurlDocIntegrationPermission4B2A0041": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/{id}/download-url"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--documents--{id}--download-url/DocIntegration-Permission"
+   }
+  },
+  "HttpApiGETdocumentsiddownloadurl6FDA3862": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /documents/{id}/download-url",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--documents--{id}--download-url/Resource"
+   }
+  },
+  "HttpApiDELETEdocumentsidDocIntegrationPermission4FA01038": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/{id}"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--documents--{id}/DocIntegration-Permission"
+   }
+  },
+  "HttpApiDELETEdocumentsid55748065": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "DELETE /documents/{id}",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--documents--{id}/Resource"
+   }
+  },
+  "HttpApiDELETEdocumentsDocIntegrationPermissionEB011026": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--documents/DocIntegration-Permission"
+   }
+  },
+  "HttpApiDELETEdocuments978FE59B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "DELETE /documents",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/DELETE--documents/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsidflaggedindexresolveDocIntegrationPermissionDCFCE638": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/{id}/flagged/{index}/resolve"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--{id}--flagged--{index}--resolve/DocIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTdocumentsidflaggedindexresolveB7879C76": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /documents/{id}/flagged/{index}/resolve",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--{id}--flagged--{index}--resolve/Resource"
+   }
+  },
+  "HttpApiPOSTdocumentsregistersupportingDocIntegrationPermissionDE13751F": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DocumentHandlerC2057DD1",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/documents/register-supporting"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--register-supporting/DocIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTdocumentsregistersupportingC73C4D49": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /documents/register-supporting",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTdocumentsuploadurlDocIntegrationE2A6C3B8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--documents--register-supporting/Resource"
+   }
+  },
+  "HttpApiGETcredentialsCredIntegrationEFA7ABE0": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "CredentialHandlerD61EA449",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--credentials/CredIntegration/Resource"
+   }
+  },
+  "HttpApiGETcredentialsCredIntegrationPermission2FABEF7C": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "CredentialHandlerD61EA449",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/credentials"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--credentials/CredIntegration-Permission"
+   }
+  },
+  "HttpApiGETcredentialsF148711C": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /credentials",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETcredentialsCredIntegrationEFA7ABE0"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--credentials/Resource"
+   }
+  },
+  "HttpApiPOSTcredentialsCredIntegrationPermission2F0E869A": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "CredentialHandlerD61EA449",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/credentials"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--credentials/CredIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTcredentials033FBBA7": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /credentials",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETcredentialsCredIntegrationEFA7ABE0"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--credentials/Resource"
+   }
+  },
+  "HttpApiPOSTcredentialsidcopyCredIntegrationPermissionAC6D5953": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "CredentialHandlerD61EA449",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/credentials/{id}/copy"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--credentials--{id}--copy/CredIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTcredentialsidcopy43C50A3B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /credentials/{id}/copy",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETcredentialsCredIntegrationEFA7ABE0"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--credentials--{id}--copy/Resource"
+   }
+  },
+  "HttpApiPUTcredentialsidCredIntegrationPermission84FE38D3": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "CredentialHandlerD61EA449",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/credentials/{id}"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--credentials--{id}/CredIntegration-Permission"
+   }
+  },
+  "HttpApiPUTcredentialsid995CB3B3": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "PUT /credentials/{id}",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETcredentialsCredIntegrationEFA7ABE0"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--credentials--{id}/Resource"
+   }
+  },
+  "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--dashboard/HeartlandIntegration/Resource"
+   }
+  },
+  "HttpApiGETposdashboardHeartlandIntegrationPermission417FA1C1": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/dashboard"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--dashboard/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposdashboard81CF6450": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/dashboard",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--dashboard/Resource"
+   }
+  },
+  "HttpApiGETpossalesHeartlandIntegrationPermissionA124DB01": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/sales"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--sales/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETpossales446DAA47": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/sales",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--sales/Resource"
+   }
+  },
+  "HttpApiGETposimporttaxdefaultsHeartlandIntegrationPermissionC7E89602": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/import-tax-defaults"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--import-tax-defaults/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposimporttaxdefaultsF0306735": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/import-tax-defaults",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--import-tax-defaults/Resource"
+   }
+  },
+  "HttpApiGETposanalyticsHeartlandIntegrationPermission7D4B2246": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/analytics"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--analytics/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposanalytics723392CC": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/analytics",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--analytics/Resource"
+   }
+  },
+  "HttpApiGETposinventoryHeartlandIntegrationPermissionAF49E877": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/inventory"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--inventory/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposinventoryD9C53146": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/inventory",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--inventory/Resource"
+   }
+  },
+  "HttpApiGETposstaffHeartlandIntegrationPermission3E03C647": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/staff"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--staff/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposstaff5F1B92FF": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/staff",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--staff/Resource"
+   }
+  },
+  "HttpApiGETpossyncstatusHeartlandIntegrationPermission1863BEF7": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/sync-status"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--sync-status/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETpossyncstatusCB8DD338": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/sync-status",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--sync-status/Resource"
+   }
+  },
+  "HttpApiPOSTpossyncHeartlandIntegrationPermission8FC93079": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/sync"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--sync/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTpossync765254C4": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /pos/sync",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--sync/Resource"
+   }
+  },
+  "HttpApiGETpospurchasingHeartlandIntegrationPermission400CBDE5": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/purchasing"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--purchasing/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETpospurchasingD823685E": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/purchasing",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--purchasing/Resource"
+   }
+  },
+  "HttpApiGETpospurchasingordersidlinesHeartlandIntegrationPermission14FDF373": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/purchasing/orders/{id}/lines"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--purchasing--orders--{id}--lines/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETpospurchasingordersidlines4253399C": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/purchasing/orders/{id}/lines",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--purchasing--orders--{id}--lines/Resource"
+   }
+  },
+  "HttpApiGETposvendorhealthHeartlandIntegrationPermissionDA56DE76": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/vendor-health"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--vendor-health/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposvendorhealthF837B60A": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/vendor-health",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--vendor-health/Resource"
+   }
+  },
+  "HttpApiGETposreportingHeartlandIntegrationPermissionCA5AC4D8": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/reporting"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--reporting/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposreporting68A39FC5": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/reporting",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--reporting/Resource"
+   }
+  },
+  "HttpApiGETposinsightsHeartlandIntegrationPermissionEBA5F86F": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/insights"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--insights/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposinsights99756132": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/insights",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--insights/Resource"
+   }
+  },
+  "HttpApiGETposvendorsettingsHeartlandIntegrationPermission5BE03B08": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/vendor-settings"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--vendor-settings/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETposvendorsettings76F346F5": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/vendor-settings",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--vendor-settings/Resource"
+   }
+  },
+  "HttpApiPUTposvendorsettingsHeartlandIntegrationPermission7FB4ABC1": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/vendor-settings"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--pos--vendor-settings/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiPUTposvendorsettingsBE4BC2EA": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "PUT /pos/vendor-settings",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--pos--vendor-settings/Resource"
+   }
+  },
+  "HttpApiGETadminsettingsHeartlandIntegrationPermissionDCD068FF": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/admin/settings"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--admin--settings/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETadminsettings0962E547": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /admin/settings",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--admin--settings/Resource"
+   }
+  },
+  "HttpApiPUTadminsettingsHeartlandIntegrationPermissionE9B994A0": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/admin/settings"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--admin--settings/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiPUTadminsettingsBADD010B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "PUT /admin/settings",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/PUT--admin--settings/Resource"
+   }
+  },
+  "HttpApiPOSTposchatChatIntegration81CF4C23": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "ChatHandler6667856F",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--chat/ChatIntegration/Resource"
+   }
+  },
+  "HttpApiPOSTposchatChatIntegrationPermission7E8B4E94": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "ChatHandler6667856F",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/chat"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--chat/ChatIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTposchat93BE9CE6": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /pos/chat",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTposchatChatIntegration81CF4C23"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--chat/Resource"
+   }
+  },
+  "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--analyze/GmailAnalysisIntegration/Resource"
+   }
+  },
+  "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationPermissionA722554A": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/gmail/analyze"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--analyze/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTgmailanalyze889369CD": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /gmail/analyze",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--analyze/Resource"
+   }
+  },
+  "HttpApiGETgmailanalyzeGmailAnalysisIntegrationPermissionAB89C8A0": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/gmail/analyze"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--gmail--analyze/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiGETgmailanalyze57D30E1C": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /gmail/analyze",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--gmail--analyze/Resource"
+   }
+  },
+  "HttpApiPOSTgmailchatGmailAnalysisIntegrationPermission2BC48F06": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/gmail/chat"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--chat/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTgmailchat3A455578": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /gmail/chat",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--chat/Resource"
+   }
+  },
+  "HttpApiGETgmailcachestatsGmailAnalysisIntegrationPermissionD68FE914": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/gmail/cache-stats"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--gmail--cache-stats/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiGETgmailcachestatsB2827715": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /gmail/cache-stats",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--gmail--cache-stats/Resource"
+   }
+  },
+  "HttpApiPOSTposdailyhighlightsGmailAnalysisIntegrationPermissionC5966613": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/daily-highlights"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--daily-highlights/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTposdailyhighlights40BF4025": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /pos/daily-highlights",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--pos--daily-highlights/Resource"
+   }
+  },
+  "HttpApiGETposdailyhighlightsGmailAnalysisIntegrationPermissionB2675FD8": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandler3BB29BC8",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/pos/daily-highlights"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--daily-highlights/GmailAnalysisIntegration-Permission"
+   }
+  },
+  "HttpApiGETposdailyhighlights6D966D1E": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /pos/daily-highlights",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailanalyzeGmailAnalysisIntegrationA58347DA"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--pos--daily-highlights/Resource"
+   }
+  },
+  "HttpApiPOSTgmailsyncGmailSyncIntegration78A958C6": {
+   "Type": "AWS::ApiGatewayV2::Integration",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "IntegrationType": "AWS_PROXY",
+    "IntegrationUri": {
+     "Fn::GetAtt": [
+      "GmailSyncHandlerB731275E",
+      "Arn"
+     ]
+    },
+    "PayloadFormatVersion": "2.0"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--sync/GmailSyncIntegration/Resource"
+   }
+  },
+  "HttpApiPOSTgmailsyncGmailSyncIntegrationPermission76CCEB19": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailSyncHandlerB731275E",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/gmail/sync"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--sync/GmailSyncIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTgmailsync1179958B": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /gmail/sync",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiPOSTgmailsyncGmailSyncIntegration78A958C6"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--gmail--sync/Resource"
+   }
+  },
+  "HttpApiGETadminemailsHeartlandIntegrationPermissionFFE485EB": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/admin/emails"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--admin--emails/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiGETadminemails883B6CD5": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "GET /admin/emails",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/GET--admin--emails/Resource"
+   }
+  },
+  "HttpApiPOSTadmintestemailHeartlandIntegrationPermissionEDB1F586": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "HeartlandHandlerB43C85E0",
+      "Arn"
+     ]
+    },
+    "Principal": "apigateway.amazonaws.com",
+    "SourceArn": {
+     "Fn::Join": [
+      "",
+      [
+       "arn:",
+       {
+        "Ref": "AWS::Partition"
+       },
+       ":execute-api:us-east-1:558985210319:",
+       {
+        "Ref": "HttpApiF5A9A8A7"
+       },
+       "/*/*/admin/test-email"
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--admin--test-email/HeartlandIntegration-Permission"
+   }
+  },
+  "HttpApiPOSTadmintestemailB8AE5089": {
+   "Type": "AWS::ApiGatewayV2::Route",
+   "Properties": {
+    "ApiId": {
+     "Ref": "HttpApiF5A9A8A7"
+    },
+    "AuthorizationType": "JWT",
+    "AuthorizerId": {
+     "Ref": "HttpApiCognitoAuthorizer935FA0F6"
+    },
+    "RouteKey": "POST /admin/test-email",
+    "Target": {
+     "Fn::Join": [
+      "",
+      [
+       "integrations/",
+       {
+        "Ref": "HttpApiGETposdashboardHeartlandIntegrationC7DB19A8"
+       }
+      ]
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/HttpApi/POST--admin--test-email/Resource"
+   }
+  },
+  "ChatHandlerServiceRole801A14FE": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-chat"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/ChatHandler/ServiceRole/Resource"
+   }
+  },
+  "ChatHandlerServiceRoleDefaultPolicy7E79112C": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "bedrock:InvokeModel",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0"
+       ],
+       "Sid": "ChatBedrockInvoke"
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/gmail/*",
+       "Sid": "ChatGmailSecrets"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "ChatHandlerServiceRoleDefaultPolicy7E79112C",
+    "Roles": [
+     {
+      "Ref": "ChatHandlerServiceRole801A14FE"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/ChatHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "ChatHandler6667856F": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "2d0adb58e2c9b4e658d6ba032088a297bdd9a22f001c7ca300e6f7ecad480014.zip"
+    },
+    "Description": "Sales & Revenue AI chatbot — Bedrock tool use with DynamoDB data access",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "BEDROCK_MODEL_ID": "us.amazon.nova-pro-v1:0"
+     }
+    },
+    "FunctionName": "foot-solutions-chat-handler",
+    "Handler": "index.handler",
+    "MemorySize": 256,
+    "Role": {
+     "Fn::GetAtt": [
+      "ChatHandlerServiceRole801A14FE",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-chat"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 60
+   },
+   "DependsOn": [
+    "ChatHandlerServiceRoleDefaultPolicy7E79112C",
+    "ChatHandlerServiceRole801A14FE"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/ChatHandler/Resource",
+    "aws:asset:path": "asset.2d0adb58e2c9b4e658d6ba032088a297bdd9a22f001c7ca300e6f7ecad480014",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "GmailAnalysisHandlerServiceRoleC4ED1C5E": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailAnalysisHandler/ServiceRole/Resource"
+   }
+  },
+  "GmailAnalysisHandlerServiceRoleDefaultPolicyB76318EA": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6",
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0",
+        "arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-pro-v1:0"
+       ],
+       "Sid": "GmailAnalysisBedrockInvoke"
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/gmail/*",
+        "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/tavily/*"
+       ],
+       "Sid": "GmailAnalysisGmailSecrets"
+      },
+      {
+       "Action": "lambda:InvokeFunction",
+       "Effect": "Allow",
+       "Resource": "arn:aws:lambda:us-east-1:558985210319:function:foot-solutions-gmail-analysis",
+       "Sid": "GmailAnalysisSelfInvoke"
+      },
+      {
+       "Action": "bedrock:InvokeModel",
+       "Effect": "Allow",
+       "Resource": "arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-multilingual-v3",
+       "Sid": "GmailAnalysisEmbedQuery"
+      },
+      {
+       "Action": [
+        "s3vectors:QueryVectors",
+        "s3vectors:GetVectors",
+        "s3vectors:GetIndex"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:s3vectors:us-east-1:558985210319:bucket/fs-gmail-vectors-558985210319",
+        "arn:aws:s3vectors:us-east-1:558985210319:bucket/fs-gmail-vectors-558985210319/index/gmail-messages"
+       ],
+       "Sid": "GmailAnalysisVectorQuery"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "GmailAnalysisHandlerServiceRoleDefaultPolicyB76318EA",
+    "Roles": [
+     {
+      "Ref": "GmailAnalysisHandlerServiceRoleC4ED1C5E"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailAnalysisHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "GmailAnalysisHandler3BB29BC8": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "686f0d426e9dfded4d40f5745c37dc6ec29bc411315cff14393c93f69e285a4a.zip"
+    },
+    "Description": "Gmail Analysis: structured digest + agentic chat grounded in the owner's inbox",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-6",
+      "VECTOR_BUCKET_NAME": "fs-gmail-vectors-558985210319",
+      "VECTOR_INDEX_NAME": "gmail-messages",
+      "EMBED_MODEL_ID": "cohere.embed-multilingual-v3"
+     }
+    },
+    "FunctionName": "foot-solutions-gmail-analysis",
+    "Handler": "index.handler",
+    "MemorySize": 512,
+    "Role": {
+     "Fn::GetAtt": [
+      "GmailAnalysisHandlerServiceRoleC4ED1C5E",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 300
+   },
+   "DependsOn": [
+    "GmailAnalysisHandlerServiceRoleDefaultPolicyB76318EA",
+    "GmailAnalysisHandlerServiceRoleC4ED1C5E"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailAnalysisHandler/Resource",
+    "aws:asset:path": "asset.686f0d426e9dfded4d40f5745c37dc6ec29bc411315cff14393c93f69e285a4a",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "GmailVectorBucket": {
+   "Type": "AWS::S3Vectors::VectorBucket",
+   "Properties": {
+    "EncryptionConfiguration": {
+     "SseType": "AES256"
+    },
+    "Tags": [
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "VectorBucketName": "fs-gmail-vectors-558985210319"
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailVectorBucket"
+   }
+  },
+  "GmailVectorIndex": {
+   "Type": "AWS::S3Vectors::Index",
+   "Properties": {
+    "DataType": "float32",
+    "Dimension": 1024,
+    "DistanceMetric": "cosine",
+    "IndexName": "gmail-messages",
+    "MetadataConfiguration": {
+     "NonFilterableMetadataKeys": [
+      "bodyPreview"
+     ]
+    },
+    "Tags": [
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "VectorBucketName": "fs-gmail-vectors-558985210319"
+   },
+   "DependsOn": [
+    "GmailVectorBucket"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailVectorIndex"
+   }
+  },
+  "GmailEmbedDLQ55EB7565": {
+   "Type": "AWS::SQS::Queue",
+   "Properties": {
+    "MessageRetentionPeriod": 1209600,
+    "QueueName": "foot-solutions-gmail-embed-dlq",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedDLQ/Resource"
+   }
+  },
+  "GmailEmbedDLQPolicyE61C3609": {
+   "Type": "AWS::SQS::QueuePolicy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sqs:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": {
+        "Fn::GetAtt": [
+         "GmailEmbedDLQ55EB7565",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Queues": [
+     {
+      "Ref": "GmailEmbedDLQ55EB7565"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedDLQ/Policy/Resource"
+   }
+  },
+  "GmailEmbedQueue9462C7D9": {
+   "Type": "AWS::SQS::Queue",
+   "Properties": {
+    "MessageRetentionPeriod": 604800,
+    "QueueName": "foot-solutions-gmail-embed",
+    "RedrivePolicy": {
+     "deadLetterTargetArn": {
+      "Fn::GetAtt": [
+       "GmailEmbedDLQ55EB7565",
+       "Arn"
+      ]
+     },
+     "maxReceiveCount": 3
+    },
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "VisibilityTimeout": 120
+   },
+   "UpdateReplacePolicy": "Delete",
+   "DeletionPolicy": "Delete",
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedQueue/Resource"
+   }
+  },
+  "GmailEmbedQueuePolicy9160405F": {
+   "Type": "AWS::SQS::QueuePolicy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sqs:*",
+       "Condition": {
+        "Bool": {
+         "aws:SecureTransport": "false"
+        }
+       },
+       "Effect": "Deny",
+       "Principal": {
+        "AWS": "*"
+       },
+       "Resource": {
+        "Fn::GetAtt": [
+         "GmailEmbedQueue9462C7D9",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "Queues": [
+     {
+      "Ref": "GmailEmbedQueue9462C7D9"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedQueue/Policy/Resource"
+   }
+  },
+  "GmailEmbedHandlerServiceRoleC118CF40": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedHandler/ServiceRole/Resource"
+   }
+  },
+  "GmailEmbedHandlerServiceRoleDefaultPolicyDB0F0197": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "bedrock:InvokeModel",
+       "Effect": "Allow",
+       "Resource": "arn:aws:bedrock:us-east-1::foundation-model/cohere.embed-multilingual-v3",
+       "Sid": "GmailEmbedBedrockInvoke"
+      },
+      {
+       "Action": [
+        "s3vectors:PutVectors",
+        "s3vectors:GetIndex"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:s3vectors:us-east-1:558985210319:bucket/fs-gmail-vectors-558985210319",
+        "arn:aws:s3vectors:us-east-1:558985210319:bucket/fs-gmail-vectors-558985210319/index/gmail-messages"
+       ],
+       "Sid": "GmailEmbedVectorWrite"
+      },
+      {
+       "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueUrl",
+        "sqs:DeleteMessage",
+        "sqs:GetQueueAttributes"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "GmailEmbedQueue9462C7D9",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "GmailEmbedHandlerServiceRoleDefaultPolicyDB0F0197",
+    "Roles": [
+     {
+      "Ref": "GmailEmbedHandlerServiceRoleC118CF40"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "GmailEmbedHandlerA897E05F": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "e4d81a5b77923880151cd8cd549503a4f5205ee873044aad5b0e28e2d72d7f2c.zip"
+    },
+    "Description": "Embeds Gmail messages with Cohere v3 multilingual and writes to S3 Vectors",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "VECTOR_BUCKET_NAME": "fs-gmail-vectors-558985210319",
+      "VECTOR_INDEX_NAME": "gmail-messages",
+      "EMBED_MODEL_ID": "cohere.embed-multilingual-v3"
+     }
+    },
+    "FunctionName": "foot-solutions-gmail-embed",
+    "Handler": "index.handler",
+    "MemorySize": 512,
+    "Role": {
+     "Fn::GetAtt": [
+      "GmailEmbedHandlerServiceRoleC118CF40",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 60
+   },
+   "DependsOn": [
+    "GmailEmbedHandlerServiceRoleDefaultPolicyDB0F0197",
+    "GmailEmbedHandlerServiceRoleC118CF40"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedHandler/Resource",
+    "aws:asset:path": "asset.e4d81a5b77923880151cd8cd549503a4f5205ee873044aad5b0e28e2d72d7f2c",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "GmailEmbedHandlerSqsEventSourceFootSolutionsStackGmailEmbedQueue3B017537B87CDDF0": {
+   "Type": "AWS::Lambda::EventSourceMapping",
+   "Properties": {
+    "BatchSize": 10,
+    "EventSourceArn": {
+     "Fn::GetAtt": [
+      "GmailEmbedQueue9462C7D9",
+      "Arn"
+     ]
+    },
+    "FunctionName": {
+     "Ref": "GmailEmbedHandlerA897E05F"
+    },
+    "FunctionResponseTypes": [
+     "ReportBatchItemFailures"
+    ],
+    "MaximumBatchingWindowInSeconds": 10,
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-gmail-analysis"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailEmbedHandler/SqsEventSource:FootSolutionsStackGmailEmbedQueue3B017537/Resource"
+   }
+  },
+  "GmailSyncHandlerServiceRole8E657E5B": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "gmail-sync"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailSyncHandler/ServiceRole/Resource"
+   }
+  },
+  "GmailSyncHandlerServiceRoleDefaultPolicyD20E5576": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/gmail/*",
+       "Sid": "GmailSyncGmailSecrets"
+      },
+      {
+       "Action": [
+        "sqs:SendMessage",
+        "sqs:GetQueueAttributes",
+        "sqs:GetQueueUrl"
+       ],
+       "Effect": "Allow",
+       "Resource": {
+        "Fn::GetAtt": [
+         "GmailEmbedQueue9462C7D9",
+         "Arn"
+        ]
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "GmailSyncHandlerServiceRoleDefaultPolicyD20E5576",
+    "Roles": [
+     {
+      "Ref": "GmailSyncHandlerServiceRole8E657E5B"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailSyncHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "GmailSyncHandlerB731275E": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "d8c06a6613b37aa3de86ec3e2568ac8d0a40bff23094381dd9929c816742bcd0.zip"
+    },
+    "Description": "Gmail incremental + backfill sync into DynamoDB cache (TTL 365 days)",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "EMBED_QUEUE_URL": {
+       "Ref": "GmailEmbedQueue9462C7D9"
+      }
+     }
+    },
+    "FunctionName": "foot-solutions-gmail-sync",
+    "Handler": "index.handler",
+    "MemorySize": 1024,
+    "Role": {
+     "Fn::GetAtt": [
+      "GmailSyncHandlerServiceRole8E657E5B",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "gmail-sync"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 900
+   },
+   "DependsOn": [
+    "GmailSyncHandlerServiceRoleDefaultPolicyD20E5576",
+    "GmailSyncHandlerServiceRole8E657E5B"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailSyncHandler/Resource",
+    "aws:asset:path": "asset.d8c06a6613b37aa3de86ec3e2568ac8d0a40bff23094381dd9929c816742bcd0",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "GmailSyncDailySchedule4CDC09B9": {
+   "Type": "AWS::Events::Rule",
+   "Properties": {
+    "Description": "Daily incremental Gmail sync (~1am Central)",
+    "ScheduleExpression": "cron(0 6 * * ? *)",
+    "State": "ENABLED",
+    "Tags": [
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Targets": [
+     {
+      "Arn": {
+       "Fn::GetAtt": [
+        "GmailSyncHandlerB731275E",
+        "Arn"
+       ]
+      },
+      "Id": "Target0",
+      "Input": "{\"mode\":\"incremental\"}"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailSyncDailySchedule/Resource"
+   }
+  },
+  "GmailSyncDailyScheduleAllowEventRuleFootSolutionsStackGmailSyncHandlerCBEF6A4079D8AF61": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "GmailSyncHandlerB731275E",
+      "Arn"
+     ]
+    },
+    "Principal": "events.amazonaws.com",
+    "SourceArn": {
+     "Fn::GetAtt": [
+      "GmailSyncDailySchedule4CDC09B9",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/GmailSyncDailySchedule/AllowEventRuleFootSolutionsStackGmailSyncHandlerCBEF6A40"
+   }
+  },
+  "DailyReportHandlerServiceRoleBF4359A6": {
+   "Type": "AWS::IAM::Role",
+   "Properties": {
+    "AssumeRolePolicyDocument": {
+     "Statement": [
+      {
+       "Action": "sts:AssumeRole",
+       "Effect": "Allow",
+       "Principal": {
+        "Service": "lambda.amazonaws.com"
+       }
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "ManagedPolicyArns": [
+     {
+      "Fn::Join": [
+       "",
+       [
+        "arn:",
+        {
+         "Ref": "AWS::Partition"
+        },
+        ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+       ]
+      ]
+     }
+    ],
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-daily-report"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DailyReportHandler/ServiceRole/Resource"
+   }
+  },
+  "DailyReportHandlerServiceRoleDefaultPolicy75342823": {
+   "Type": "AWS::IAM::Policy",
+   "Properties": {
+    "PolicyDocument": {
+     "Statement": [
+      {
+       "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem",
+        "dynamodb:DescribeTable"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "dynamodb:GetRecords",
+        "dynamodb:GetShardIterator"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        {
+         "Fn::GetAtt": [
+          "AppTable815C50BC",
+          "Arn"
+         ]
+        }
+       ]
+      },
+      {
+       "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream"
+       ],
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-7",
+        "arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7",
+        "arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-5-20251101-v1:0"
+       ],
+       "Sid": "DailyReportBedrockInvoke"
+      },
+      {
+       "Action": "ses:SendEmail",
+       "Effect": "Allow",
+       "Resource": "arn:aws:ses:us-east-1:558985210319:identity/fsmanagementsystem.com",
+       "Sid": "DailyReportSesSend"
+      },
+      {
+       "Action": "secretsmanager:GetSecretValue",
+       "Effect": "Allow",
+       "Resource": [
+        "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/gmail/*",
+        "arn:aws:secretsmanager:us-east-1:558985210319:secret:foot-solutions/tavily/*"
+       ],
+       "Sid": "DailyReportSecrets"
+      }
+     ],
+     "Version": "2012-10-17"
+    },
+    "PolicyName": "DailyReportHandlerServiceRoleDefaultPolicy75342823",
+    "Roles": [
+     {
+      "Ref": "DailyReportHandlerServiceRoleBF4359A6"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DailyReportHandler/ServiceRole/DefaultPolicy/Resource"
+   }
+  },
+  "DailyReportHandlerB6040060": {
+   "Type": "AWS::Lambda::Function",
+   "Properties": {
+    "Code": {
+     "S3Bucket": "cdk-hnb659fds-assets-558985210319-us-east-1",
+     "S3Key": "e99cdfe74ddcd4b58b7e15d3bb7ac88e8f8a3d178103400e6448dab74e191350.zip"
+    },
+    "Description": "Daily sales briefing email — Bedrock Claude + SES",
+    "Environment": {
+     "Variables": {
+      "TABLE_NAME": {
+       "Ref": "AppTable815C50BC"
+      },
+      "OWNER_USER_ID": "94989478-c051-7005-9033-3d722963c59b",
+      "BEDROCK_MODEL_ID": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "FROM_ADDRESS": "noreply@fsmanagementsystem.com",
+      "TO_ADDRESS": "flowermound@footsolutions.com"
+     }
+    },
+    "FunctionName": "foot-solutions-daily-report",
+    "Handler": "index.handler",
+    "MemorySize": 512,
+    "Role": {
+     "Fn::GetAtt": [
+      "DailyReportHandlerServiceRoleBF4359A6",
+      "Arn"
+     ]
+    },
+    "Runtime": "nodejs20.x",
+    "Tags": [
+     {
+      "Key": "Component",
+      "Value": "ai-daily-report"
+     },
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Timeout": 120
+   },
+   "DependsOn": [
+    "DailyReportHandlerServiceRoleDefaultPolicy75342823",
+    "DailyReportHandlerServiceRoleBF4359A6"
+   ],
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DailyReportHandler/Resource",
+    "aws:asset:path": "asset.e99cdfe74ddcd4b58b7e15d3bb7ac88e8f8a3d178103400e6448dab74e191350",
+    "aws:asset:is-bundled": true,
+    "aws:asset:property": "Code"
+   }
+  },
+  "DailyReportSchedule24F1833B": {
+   "Type": "AWS::Events::Rule",
+   "Properties": {
+    "Description": "Trigger daily sales briefing email at ~10 PM Central",
+    "ScheduleExpression": "cron(0 3 * * ? *)",
+    "State": "ENABLED",
+    "Tags": [
+     {
+      "Key": "CostCenter",
+      "Value": "foot-solutions-flowermound"
+     },
+     {
+      "Key": "Environment",
+      "Value": "production"
+     },
+     {
+      "Key": "ManagedBy",
+      "Value": "cdk"
+     },
+     {
+      "Key": "Owner",
+      "Value": "flowermound@footsolutions.com"
+     },
+     {
+      "Key": "Project",
+      "Value": "foot-solutions-platform"
+     }
+    ],
+    "Targets": [
+     {
+      "Arn": {
+       "Fn::GetAtt": [
+        "DailyReportHandlerB6040060",
+        "Arn"
+       ]
+      },
+      "Id": "Target0"
+     }
+    ]
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DailyReportSchedule/Resource"
+   }
+  },
+  "DailyReportScheduleAllowEventRuleFootSolutionsStackDailyReportHandler53203982DF12A612": {
+   "Type": "AWS::Lambda::Permission",
+   "Properties": {
+    "Action": "lambda:InvokeFunction",
+    "FunctionName": {
+     "Fn::GetAtt": [
+      "DailyReportHandlerB6040060",
+      "Arn"
+     ]
+    },
+    "Principal": "events.amazonaws.com",
+    "SourceArn": {
+     "Fn::GetAtt": [
+      "DailyReportSchedule24F1833B",
+      "Arn"
+     ]
+    }
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/DailyReportSchedule/AllowEventRuleFootSolutionsStackDailyReportHandler53203982"
+   }
+  },
+  "CDKMetadata": {
+   "Type": "AWS::CDK::Metadata",
+   "Properties": {
+    "Analytics": "v2:deflate64:H4sIAAAAAAAA/21S0Y7TMBD8lnt3zanlPiDXA3EPcEcKvFYbZxvcJnbwrluK5X9HttOmOpCi7MzsxNmdZCmXD+/l/R2caKHaw6LXjQwbBnUQcKJtULYzmq0M3wndq7W9WO/MFV/Akx1Am9vWpFzoutdo+NZQlChoJcOjVwfM3QmV8mp7rc6zPPFCHoEwCtVb3+6cNSzDZvXidKdNpRQSra1hV8b9n/ykiZ1uPGub577lUTjrGR9WMlQ1Kuva5ChogywqACgsivZsYLBtI8M3aHpMxgyi6GFoWtga2+Ke5JdcPnqj8hs1DDLUtjyQ67xsQSmZLRAhk6xSmQ6UYb0z13OSHd2giRL7cETDG+udws8wjtp0yfCvGgUmjWSo/TSCTyPDqDtgPMH5uJThE/NYjTq1U0l0w9BlfwFJqlNUGT0bxs7BZa43dPZVnn9ap/+gy0dfWdr4iIqto7zkj4znf+PZtPg7CvpFMnz16PMgBeT7nOANjVHUSHn51LnEkhNNS0wZvXgePUeRvpbc07vj8l6m625PWi+cN6wHlHWpfwGK8t9ENAMAAA=="
+   },
+   "Metadata": {
+    "aws:cdk:path": "FootSolutionsStack/CDKMetadata/Default"
+   }
+  }
+ },
+ "Mappings": {
+  "AWSCloudFrontPartitionHostedZoneIdMap": {
+   "aws": {
+    "zoneId": "Z2FDTNDATAQYW2"
+   },
+   "aws-cn": {
+    "zoneId": "Z3RFFRIM2A3IF5"
+   }
+  }
+ },
+ "Outputs": {
+  "ApiUrl": {
+   "Description": "API Gateway HTTP API endpoint URL",
+   "Value": {
+    "Fn::GetAtt": [
+     "HttpApiF5A9A8A7",
+     "ApiEndpoint"
+    ]
+   },
+   "Export": {
+    "Name": "FootSolutions-ApiUrl"
+   }
+  },
+  "UserPoolId": {
+   "Description": "Cognito User Pool ID",
+   "Value": {
+    "Ref": "UserPool6BA7E5F2"
+   },
+   "Export": {
+    "Name": "FootSolutions-UserPoolId"
+   }
+  },
+  "UserPoolClientId": {
+   "Description": "Cognito User Pool Client ID",
+   "Value": {
+    "Ref": "UserPoolWebClient4C9370B0"
+   },
+   "Export": {
+    "Name": "FootSolutions-UserPoolClientId"
+   }
+  },
+  "CloudFrontUrl": {
+   "Description": "CloudFront distribution URL",
+   "Value": "https://fsmanagementsystem.com",
+   "Export": {
+    "Name": "FootSolutions-CloudFrontUrl"
+   }
+  },
+  "StaticBucketName": {
+   "Description": "S3 static assets bucket name",
+   "Value": {
+    "Ref": "StaticBucket92253581"
+   },
+   "Export": {
+    "Name": "FootSolutions-StaticBucketName"
+   }
+  },
+  "DistributionId": {
+   "Description": "CloudFront distribution ID",
+   "Value": {
+    "Ref": "Distribution830FAC52"
+   },
+   "Export": {
+    "Name": "FootSolutions-DistributionId"
+   }
+  },
+  "CognitoHostedUiUrl": {
+   "Description": "Cognito Hosted UI base domain — append /login?client_id=<ClientId>&response_type=code&scope=openid+email&redirect_uri=<CloudFrontUrl>/",
+   "Value": "https://foot-solutions-app.auth.us-east-1.amazoncognito.com",
+   "Export": {
+    "Name": "FootSolutions-CognitoHostedUiUrl"
+   }
+  },
+  "DocsBucketName": {
+   "Description": "S3 bucket for uploaded CPA documents",
+   "Value": {
+    "Ref": "DocsBucketECEA003F"
+   },
+   "Export": {
+    "Name": "FootSolutions-DocsBucketName"
+   }
+  }
+ },
+ "Parameters": {
+  "BootstrapVersion": {
+   "Type": "AWS::SSM::Parameter::Value<String>",
+   "Default": "/cdk-bootstrap/hnb659fds/version",
+   "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+  }
+ },
+ "Rules": {
+  "CheckBootstrapVersion": {
+   "Assertions": [
+    {
+     "Assert": {
+      "Fn::Not": [
+       {
+        "Fn::Contains": [
+         [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5"
+         ],
+         {
+          "Ref": "BootstrapVersion"
+         }
+        ]
+       }
+      ]
+     },
+     "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+    }
+   ]
+  }
+ }
+}

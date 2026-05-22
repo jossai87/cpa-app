@@ -2518,9 +2518,16 @@ export default function SalesRevenue() {
                   {/* Open orders — top of Purchasing tab */}
                   {showPurchasing && d.orders.length > 0 && (
                     <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
-                      <div className="px-5 py-3 border-b border-slate-100">
-                        <h3 className="text-sm font-semibold text-slate-900">Open / Pending Orders</h3>
-                        <p className="text-xs text-slate-500 mt-0.5">Last synced {relativeTime(d.cachedAt)} · click any row to view line items</p>
+                      <div className="px-5 py-3 border-b border-slate-100 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-semibold text-slate-900">Open / Pending Orders</h3>
+                          <p className="text-xs text-slate-500 mt-0.5">Last synced {relativeTime(d.cachedAt)} · click any row to view line items</p>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-md px-2.5 py-1 shrink-0">
+                          <TrendingUp className="w-3.5 h-3.5" />
+                          <span className="text-xs font-semibold">{d.openOrderCount.toLocaleString()}</span>
+                          <span className="text-[10px] uppercase tracking-wide text-amber-700">open</span>
+                        </div>
                       </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs">
@@ -2556,14 +2563,9 @@ export default function SalesRevenue() {
                     </div>
                   )}
 
-                  {/* Vendor / Order stat cards — Vendors tab only */}
-                  {showVendors && (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <StatCard label="Vendors" value={d.vendorCount.toLocaleString()} sub="active suppliers" icon={ShoppingBag} color="blue" />
-                    <StatCard label="Total Orders" value={d.totalOrders.toLocaleString()} sub="all time" icon={Package} color="green" />
-                    <StatCard label="Open Orders" value={d.openOrderCount.toLocaleString()} sub="pending or open" icon={TrendingUp} color="amber" />
-                  </div>
-                  )}
+                  {/* Vendor / Order stat cards removed — counts now live on the
+                      Open / Pending Orders header (Purchasing tab) and the
+                      Vendor Directory header (Vendors tab). */}
 
                   {/* ── Payment Processor — Purchasing only ── */}
                   {showPurchasing && (
@@ -2616,7 +2618,14 @@ export default function SalesRevenue() {
                   {/* Vendor directory with contact info — Vendors tab only */}
                   {showVendors && (
                   <div className="bg-white rounded-lg border border-slate-200 p-5">
-                    <h3 className="text-sm font-semibold text-slate-900 mb-1">Vendor Directory ({d.vendorCount - 1})</h3>
+                    <div className="flex items-start justify-between gap-3 mb-1">
+                      <h3 className="text-sm font-semibold text-slate-900">Vendor Directory</h3>
+                      <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-2.5 py-1 shrink-0">
+                        <ShoppingBag className="w-3.5 h-3.5" />
+                        <span className="text-xs font-semibold">{(d.vendorCount - 1).toLocaleString()}</span>
+                        <span className="text-[10px] uppercase tracking-wide text-blue-700">vendors</span>
+                      </div>
+                    </div>
                     <p className="text-xs text-slate-500 mb-4">
                       Sorted by YTD net sales (highest first). Check the box to mark an active account.
                     </p>

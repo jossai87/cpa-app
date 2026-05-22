@@ -1092,7 +1092,7 @@ export class FootSolutionsStack extends Stack {
       new iam.PolicyStatement({
         sid: 'GmailAnalysisVectorQuery',
         effect: iam.Effect.ALLOW,
-        actions: ['s3vectors:QueryVectors', 's3vectors:GetIndex'],
+        actions: ['s3vectors:QueryVectors', 's3vectors:GetVectors', 's3vectors:GetIndex'],
         resources: [vectorBucketArn, vectorIndexArn],
       })
     );
