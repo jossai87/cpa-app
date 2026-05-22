@@ -1455,9 +1455,34 @@ async function handlePutVendorSettings(
 // email — non-admin users can read but not modify.
 
 const ADMIN_EMAIL = 'jandoossai@gmail.com';
+const ADMIN_SUB = 'f4682498-d0d1-70cd-c302-27ff64bb2b6e';
 
 function getCallerEmail(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
   return ((event.requestContext.authorizer.jwt.claims['email'] as string | undefined) ?? '').toLowerCase();
+}
+
+function getCallerSub(event: APIGatewayProxyEventV2WithJWTAuthorizer): string {
+  return ((event.requestContext.authorizer.jwt.claims['sub'] as string | undefined) ?? '');
+}
+
+/**
+ * Admin gate. The frontend sends the Cognito ACCESS token in the
+ * Authorization header — access tokens carry `sub` + `username` but NOT
+ * `email`. So we accept either:
+ *   • email claim equals ADMIN_EMAIL (present on ID tokens), OR
+ *   • sub claim equals ADMIN_SUB (the admin user's Cognito sub —
+ *     present on BOTH access and ID tokens).
+ *
+ * Note: ADMIN_SUB is intentionally distinct from OWNER_USER_ID. The owner
+ * data partition (94989478-…) is a legacy seed; the live admin's Cognito
+ * sub is what actually shows up in API GW JWT claims.
+ */
+function isAdminCaller(event: APIGatewayProxyEventV2WithJWTAuthorizer): boolean {
+  const email = getCallerEmail(event);
+  if (email && email === ADMIN_EMAIL.toLowerCase()) return true;
+  const sub = getCallerSub(event);
+  if (sub && sub === ADMIN_SUB) return true;
+  return false;
 }
 
 async function handleGetAdminSettings(): Promise<APIGatewayProxyResultV2> {
@@ -1477,10 +1502,12 @@ async function handleGetAdminSettings(): Promise<APIGatewayProxyResultV2> {
 async function handlePutAdminSettings(
   event: APIGatewayProxyEventV2WithJWTAuthorizer
 ): Promise<APIGatewayProxyResultV2> {
-  const email = getCallerEmail(event);
-  if (email !== ADMIN_EMAIL.toLowerCase()) {
+  if (!isAdminCaller(event)) {
     return json(403, { error: 'Only the admin can modify admin settings' });
   }
+  // Capture caller identity for the audit field — prefer email when
+  // present (ID token), fall back to sub (access token).
+  const updatedBy = getCallerEmail(event) || getCallerSub(event) || 'admin';
 
   let body: { visibilityOverrides?: Record<string, boolean>; dailyTarget?: number };
   try {
@@ -1513,7 +1540,7 @@ async function handlePutAdminSettings(
         visibilityOverrides: body.visibilityOverrides ?? prev['visibilityOverrides'] ?? {},
         dailyTarget: body.dailyTarget ?? prev['dailyTarget'] ?? 1500,
         updatedAt,
-        updatedBy: email,
+        updatedBy,
       },
     })
   );
@@ -1553,8 +1580,7 @@ async function handleGetEmails(
 async function handleTestEmail(
   event: APIGatewayProxyEventV2WithJWTAuthorizer
 ): Promise<APIGatewayProxyResultV2> {
-  const email = getCallerEmail(event);
-  if (email !== ADMIN_EMAIL.toLowerCase()) {
+  if (!isAdminCaller(event)) {
     return json(403, { error: 'Only the admin can trigger test emails' });
   }
   const fnName = process.env['DAILY_REPORT_FUNCTION_NAME'];
