@@ -177,8 +177,23 @@ interface StaffResponse {
   toDate?: string;
   /** Legacy field for backward compat */
   year?: string;
-  staff: Array<{ name: string; rawName: string; amount?: number; ytdAmount?: number; activeDays: number; avgPerDay: number }>;
+  staff: Array<{
+    name: string;
+    rawName: string;
+    /** Net of tax — preferred headline number. */
+    amount?: number;
+    /** Tax included alongside net for transparency. */
+    amountInclTax?: number;
+    /** Tax collected attributable to this rep. */
+    taxAmount?: number;
+    /** Legacy YTD field (kept for backward compat). */
+    ytdAmount?: number;
+    activeDays: number;
+    avgPerDay: number;
+  }>;
   totalUsers: number;
+  /** Becky's orthotic units sold for the selected period. */
+  beckyOrthoticCount?: number | null;
   asOf: string;
 }
 
@@ -2294,17 +2309,28 @@ export default function SalesRevenue() {
                   ? `${d.fromDate} – ${d.toDate}`
                   : '';
 
-              // Becky's commission — 4% of her total sales for the selected
-              // period. The `amount` field is whatever date window the period
-              // selector requested. We deliberately do NOT fall back to the
-              // legacy `ytdAmount` field — if the period returns no rows for
-              // Becky we want $0, not a stale YTD number.
+              // Becky's commission — 4% of her NET (ex-tax) sales for the
+              // selected period. PLUS an orthotic bonus: $10/orthotic for
+              // her first 10, $15/orthotic for any beyond 10.
               const beckyRow = d.staff.find((s) =>
                 (s.name ?? '').toLowerCase().includes('becky') ||
                 (s.rawName ?? '').toLowerCase().includes('becky')
               );
+              // amount is already ex-tax in the new response; ytdAmount is
+              // the legacy fallback (also tax-inclusive, but only used for
+              // very-old cached responses).
               const beckyAmount = beckyRow?.amount ?? 0;
+              const beckyTax = beckyRow?.taxAmount ?? 0;
               const beckyCommission = beckyAmount * 0.04;
+              const beckyOrthoticCount = d.beckyOrthoticCount ?? null;
+              const baseOrthoticCount = beckyOrthoticCount != null
+                ? Math.min(beckyOrthoticCount, 10)
+                : 0;
+              const bonusOrthoticCount = beckyOrthoticCount != null && beckyOrthoticCount > 10
+                ? beckyOrthoticCount - 10
+                : 0;
+              const orthoticBonus = baseOrthoticCount * 10 + bonusOrthoticCount * 15;
+              const beckyTotal = beckyCommission + orthoticBonus;
               const dateRangeText =
                 d.fromDate && d.toDate
                   ? `${d.fromDate} → ${d.toDate}`
@@ -2314,20 +2340,74 @@ export default function SalesRevenue() {
                 <>
                   {/* Becky commission — admin-only */}
                   {isVisible('sales.staff.beckyCommission') && beckyRow && (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5 flex items-center gap-4">
-                      <div className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-full bg-emerald-100">
-                        <Trophy className="w-6 h-6 text-emerald-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide">Becky Commission ({periodLabel})</p>
-                        <p className="text-[10px] text-emerald-600 mt-0.5">
-                          4% of {fmt(beckyAmount)} sales · paid end of month
-                          {dateRangeText && (
-                            <span className="text-emerald-500/70"> · {dateRangeText}</span>
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+                      <div className="flex items-center gap-4">
+                        <div className="flex-shrink-0 flex items-center justify-center w-12 h-12 rounded-full bg-emerald-100">
+                          <Trophy className="w-6 h-6 text-emerald-600" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-emerald-700 uppercase tracking-wide">Becky Commission ({periodLabel})</p>
+                          <p className="text-[10px] text-emerald-600 mt-0.5">
+                            4% of {fmt(beckyAmount)} net sales
+                            {beckyTax > 0 && (
+                              <span className="text-emerald-500/70"> · excludes {fmt(beckyTax)} tax</span>
+                            )}
+                            <span className="text-emerald-500/70"> · paid end of month</span>
+                            {dateRangeText && (
+                              <span className="text-emerald-500/70"> · {dateRangeText}</span>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex-shrink-0 text-right">
+                          <p className="text-3xl font-bold text-emerald-700">{fmt(beckyTotal)}</p>
+                          {orthoticBonus > 0 && (
+                            <p className="text-[10px] text-emerald-600/80 mt-0.5">
+                              {fmt(beckyCommission)} commission + {fmt(orthoticBonus)} orthotic bonus
+                            </p>
                           )}
-                        </p>
+                        </div>
                       </div>
-                      <p className="text-3xl font-bold text-emerald-700 flex-shrink-0">{fmt(beckyCommission)}</p>
+                      {/* Orthotic bonus rule + counter — visible directly
+                          underneath the commission card per Becky's
+                          incentive structure. */}
+                      <div className="mt-4 pt-4 border-t border-emerald-200">
+                        <div className="flex items-start gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-semibold text-emerald-800 uppercase tracking-wide">
+                              Orthotic Bonus
+                            </p>
+                            <p className="text-[11px] text-emerald-700 mt-0.5 leading-relaxed">
+                              <span className="font-medium">+ $10</span> per orthotic for the first 10 sold each period.
+                              {' '}<span className="font-medium">+ $15</span> per orthotic from #11 onwards.
+                            </p>
+                          </div>
+                          {beckyOrthoticCount != null ? (
+                            <div className="flex-shrink-0 text-right">
+                              <p className="text-lg font-bold text-emerald-900">
+                                {beckyOrthoticCount}
+                                <span className="text-xs font-medium text-emerald-700 ml-1">orthotic{beckyOrthoticCount === 1 ? '' : 's'}</span>
+                              </p>
+                              {beckyOrthoticCount > 0 && (
+                                <p className="text-[10px] text-emerald-600 mt-0.5">
+                                  {baseOrthoticCount > 0 && (
+                                    <span>{baseOrthoticCount} × $10 = {fmt(baseOrthoticCount * 10)}</span>
+                                  )}
+                                  {bonusOrthoticCount > 0 && (
+                                    <span>
+                                      {baseOrthoticCount > 0 && <span> · </span>}
+                                      {bonusOrthoticCount} × $15 = {fmt(bonusOrthoticCount * 15)}
+                                    </span>
+                                  )}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-emerald-500 italic flex-shrink-0">
+                              count unavailable
+                            </p>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -2352,7 +2432,10 @@ export default function SalesRevenue() {
                         <thead>
                           <tr className="border-b border-slate-100 bg-slate-50">
                             <th className="text-left px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Name</th>
-                            <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Revenue</th>
+                            <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">
+                              Revenue
+                              <span className="ml-1 text-[9px] font-normal normal-case text-slate-400">ex-tax</span>
+                            </th>
                             <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Active Days</th>
                             <th className="text-right px-4 py-3 text-xs font-medium text-slate-500 uppercase tracking-wide">Avg / Day</th>
                             <th className="px-4 py-3 w-40"></th>
@@ -2361,13 +2444,21 @@ export default function SalesRevenue() {
                         <tbody className="divide-y divide-slate-50">
                           {d.staff.map((s, i) => {
                             const amount = s.amount ?? s.ytdAmount ?? 0;
+                            const tax = s.taxAmount ?? 0;
                             return (
                               <tr key={s.rawName} className="hover:bg-slate-50">
                                 <td className="px-4 py-3 font-medium text-slate-900">
                                   {i === 0 && <span className="mr-1.5 text-amber-500">★</span>}
                                   {s.name}
                                 </td>
-                                <td className="px-4 py-3 text-right font-mono text-slate-700">{fmt(amount)}</td>
+                                <td className="px-4 py-3 text-right">
+                                  <div className="font-mono text-slate-700">{fmt(amount)}</div>
+                                  {tax > 0 && (
+                                    <div className="text-[10px] text-slate-400 mt-0.5">
+                                      ex-tax · {fmt(tax)} tax excluded
+                                    </div>
+                                  )}
+                                </td>
                                 <td className="px-4 py-3 text-right text-slate-500">{s.activeDays}</td>
                                 <td className="px-4 py-3 text-right font-mono text-slate-600">{fmt(s.avgPerDay)}</td>
                                 <td className="px-4 py-3">

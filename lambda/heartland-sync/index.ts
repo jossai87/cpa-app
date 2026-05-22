@@ -56,6 +56,7 @@ interface HeartlandPayment {
 interface HeartlandTicket {
   id: number;
   total: number;
+  total_tax: number;
   total_discounts: number;
   completed_at: string | null;
   local_completed_at: string | null;
@@ -124,6 +125,8 @@ interface DailyRollup {
   byHour: Record<string, number>;
   topCustomers: Record<string, number>;
   bySalesRep: Record<string, number>;
+  /** Tax collected per sales rep (deduct from bySalesRep for ex-tax revenue). */
+  taxBySalesRep: Record<string, number>;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -210,7 +213,7 @@ async function syncPaymentsAndTickets(secret: HeartlandSecret): Promise<{
     if (!bucket) {
       bucket = {
         date, count: 0, totalAmount: 0, totalDiscounts: 0,
-        byPaymentType: {}, byHour: {}, topCustomers: {}, bySalesRep: {},
+        byPaymentType: {}, byHour: {}, topCustomers: {}, bySalesRep: {}, taxBySalesRep: {},
       };
       rollups.set(date, bucket);
     }
@@ -238,6 +241,7 @@ async function syncPaymentsAndTickets(secret: HeartlandSecret): Promise<{
     }
     const rep = t.sales_rep?.trim() || 'Unassigned';
     bucket.bySalesRep[rep] = (bucket.bySalesRep[rep] ?? 0) + t.total;
+    bucket.taxBySalesRep[rep] = (bucket.taxBySalesRep[rep] ?? 0) + (t.total_tax ?? 0);
   }
 
   // Write to DynamoDB

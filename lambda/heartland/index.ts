@@ -57,6 +57,9 @@ interface DailyRollup {
   byHour: Record<string, number>;
   topCustomers: Record<string, number>;
   bySalesRep: Record<string, number>;
+  /** Tax collected per rep — written by sync. May be missing on legacy
+      rollup rows (treat as zero in that case). */
+  taxBySalesRep?: Record<string, number>;
 }
 
 interface InventoryCacheData {
@@ -776,26 +779,69 @@ async function handleStaff(
 
   const rollups = await queryDailyRollups(fromDate, toDate);
 
-  const repTotals: Record<string, { amount: number; days: number }> = {};
+  const repTotals: Record<string, { amount: number; tax: number; days: number }> = {};
   for (const r of rollups) {
     for (const [rep, amt] of Object.entries(r.bySalesRep ?? {})) {
-      if (!repTotals[rep]) repTotals[rep] = { amount: 0, days: 0 };
+      if (!repTotals[rep]) repTotals[rep] = { amount: 0, tax: 0, days: 0 };
       repTotals[rep]!.amount += amt;
+      repTotals[rep]!.tax += (r.taxBySalesRep?.[rep] ?? 0);
       repTotals[rep]!.days += 1;
     }
   }
 
   const staff = Object.entries(repTotals)
-    .map(([rep, v]) => ({
-      name: userMap[rep] ?? rep,
-      rawName: rep,
-      amount: Math.round(v.amount * 100) / 100,
-      activeDays: v.days,
-      avgPerDay: v.days > 0 ? Math.round((v.amount / v.days) * 100) / 100 : 0,
-    }))
+    .map(([rep, v]) => {
+      const taxRounded = Math.round(v.tax * 100) / 100;
+      const amountRounded = Math.round(v.amount * 100) / 100;
+      const amountExTax = Math.round((v.amount - v.tax) * 100) / 100;
+      return {
+        name: userMap[rep] ?? rep,
+        rawName: rep,
+        // amount = net of tax (the headline number). Kept for backward compat
+        // — older clients may still read this field.
+        amount: amountExTax,
+        amountInclTax: amountRounded,
+        taxAmount: taxRounded,
+        activeDays: v.days,
+        avgPerDay: v.days > 0 ? Math.round((amountExTax / v.days) * 100) / 100 : 0,
+      };
+    })
     .sort((a, b) => b.amount - a.amount);
 
   const status = await getSyncStatus();
+
+  // Becky's orthotic count for the period — used for her per-orthotic
+  // bonus on the Staff page. We query the analyzer directly so the
+  // count matches the date window the user selected. Heartland uses
+  // user.full_name for sales-rep grouping. We filter on the orthotic
+  // department keyword(s).
+  let beckyOrthoticCount: number | null = null;
+  try {
+    interface AnalyzerResponse {
+      results: Array<Record<string, unknown>>;
+    }
+    const analyzerPath =
+      `reporting/analyzer?metrics[]=source_sales.net_qty_sold` +
+      `&groups[]=user.full_name` +
+      `&groups[]=item.custom@department` +
+      `&start_date=${fromDate}&end_date=${toDate}`;
+    const data = await fetchFromHeartland<AnalyzerResponse>(analyzerPath);
+    let total = 0;
+    for (const row of data.results ?? []) {
+      const name = String(row['user.full_name'] ?? '').toLowerCase();
+      const dept = String(row['item.custom@department'] ?? '').toLowerCase();
+      const qty = Number(row['source_sales.net_qty_sold'] ?? 0);
+      if (!name.includes('becky')) continue;
+      if (!dept.includes('orthotic')) continue;
+      if (qty > 0) total += qty;
+    }
+    beckyOrthoticCount = Math.round(total);
+  } catch (err) {
+    // Don't fail the whole staff response if the analyzer hiccups —
+    // the bonus card just won't get a count this time.
+    console.warn('beckyOrthoticCount fetch failed:', (err as Error).message);
+    beckyOrthoticCount = null;
+  }
 
   return json(200, {
     period,
@@ -804,6 +850,7 @@ async function handleStaff(
     toDate,
     staff,
     totalUsers: users.length,
+    beckyOrthoticCount,
     syncInfo: {
       lastSyncAt: status?.['completedAt'] ?? null,
       status: status?.['status'] ?? 'never',
