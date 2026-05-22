@@ -56,10 +56,10 @@ export default function EmailFeed() {
 
   return (
     <>
-    <aside className="bg-white rounded-xl border border-slate-200 overflow-hidden flex flex-col" style={{ maxHeight: '70vh' }}>
-      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-        <Mail className="w-4 h-4 text-blue-500" />
-        <h3 className="text-sm font-semibold text-slate-900 flex-1">Daily Briefings</h3>
+    <aside className="surface overflow-hidden flex flex-col" style={{ maxHeight: '70vh' }}>
+      <div className="px-5 py-3.5 border-b border-slate-100 flex items-center gap-2 bg-gradient-to-r from-slate-50/50 to-transparent">
+        <Mail className="w-4 h-4 text-slate-500" />
+        <h3 className="text-sm font-semibold tracking-tight text-slate-900 flex-1">Daily Briefings</h3>
         {isAdmin && (
           <button
             onClick={() => setConfirmOpen(true)}

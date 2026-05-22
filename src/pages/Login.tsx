@@ -111,17 +111,17 @@ export default function Login() {
   // Post sign-out: show a sign-in button so the user explicitly initiates login
   if (promptLogin && !loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold text-slate-800 mb-2">Foot Solutions</h1>
-          <p className="text-sm text-slate-500 mb-6">You have been signed out.</p>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="surface px-10 py-12 text-center max-w-sm">
+          <h1 className="text-2xl font-semibold tracking-tight text-slate-900 mb-1.5">Foot Solutions</h1>
+          <p className="text-sm text-slate-500 mb-7">You have been signed out.</p>
           <button
             onClick={() => {
               try { window.sessionStorage.removeItem('justSignedOut'); } catch { /* ignore */ }
               triggered.current = false;
               void signInWithRedirect();
             }}
-            className="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition"
+            className="px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 font-medium transition shadow-sm"
           >
             Sign in
           </button>
@@ -131,7 +131,7 @@ export default function Login() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-slate-50">
+    <div className="flex items-center justify-center min-h-screen">
       <div className="text-center">
         <Spinner size="lg" />
         <p className="mt-4 text-sm text-slate-500">Redirecting to login…</p>

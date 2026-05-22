@@ -1194,7 +1194,7 @@ export class FootSolutionsStack extends Stack {
         // Switch to 'us.anthropic.claude-opus-4-7' after enabling marketplace
         // access at console.aws.amazon.com/bedrock → Model access.
         BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-5-20250929-v1:0',
-        FROM_ADDRESS: 'noreply@fsmanagementsystem.com',
+        FROM_ADDRESS: 'notifications@fsmanagementsystem.com',
         TO_ADDRESS: 'flowermound@footsolutions.com',
       },
       bundling: {

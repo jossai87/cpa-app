@@ -1606,15 +1606,16 @@ export default function SalesRevenue() {
   })();
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <header className="bg-white border-b border-slate-200 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">          <Link to="/" className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900 transition-colors">
+    <div className="min-h-screen">
+      <header className="app-header px-6 py-4">
+        <div className="max-w-7xl mx-auto flex items-center gap-4">
+          <Link to="/" className="btn-ghost">
             <ArrowLeft className="w-4 h-4" />
             Dashboard
           </Link>
-          <h1 className="text-xl font-semibold text-slate-900">Sales & Revenue</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900">Sales & Revenue</h1>
           <CentralTimeBadge />
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex items-center gap-2">
             <SyncBar
               status={syncStatusQ.data}
               isSyncing={syncMutation.isPending}
@@ -1623,7 +1624,7 @@ export default function SalesRevenue() {
             <button
               onClick={refetchCurrent}
               disabled={isFetching}
-              className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-50 transition"
+              className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 disabled:opacity-50 transition"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isFetching ? 'animate-spin' : ''}`} />
               {isFetching ? 'Loading…' : 'Refresh'}
@@ -1632,7 +1633,7 @@ export default function SalesRevenue() {
               onClick={downloadCurrentTab}
               disabled={downloadDisabled}
               title={downloadDisabled ? 'Load this tab first' : 'Download a CSV/Excel-friendly export of this tab'}
-              className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
               <Download className="w-3.5 h-3.5" />
               Download

@@ -46,7 +46,7 @@ const sesClient = new SESv2Client({ region: 'us-east-1' });
 const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
 const MODEL_ID = process.env['BEDROCK_MODEL_ID'] ?? 'global.anthropic.claude-sonnet-4-5-20250929-v1:0';
-const FROM_ADDRESS = process.env['FROM_ADDRESS'] ?? 'noreply@fsmanagementsystem.com';
+const FROM_ADDRESS = process.env['FROM_ADDRESS'] ?? 'notifications@fsmanagementsystem.com';
 const TO_ADDRESS = process.env['TO_ADDRESS'] ?? 'flowermound@footsolutions.com';
 
 const STORE_TZ = 'America/Chicago';
@@ -1000,21 +1000,31 @@ export const handler = async (event?: { trigger?: string }) => {
     lowerBody.includes('missed target') ? 'miss' :
     'pace';
 
-  const subject = `Foot Solutions — Daily Briefing · ${today}`;
+  // Format a friendly subject line. Gmail and Outlook spam classifiers
+  // sometimes flag emoji + middot characters as bulk/promotional, so we
+  // keep the subject plain and conversational.
+  const subjectDate = new Intl.DateTimeFormat('en-US', {
+    timeZone: STORE_TZ,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date());
+  const subject = `Foot Solutions Daily Briefing — ${subjectDate}`;
   const htmlBody = wrapEmailHtml(emailBody, today, status);
 
   // Send email via SES
   let sendStatus: 'sent' | 'failed' = 'sent';
   let sendError: string | null = null;
+  let sentMessageId: string | null = null;
   try {
-    await sesClient.send(new SendEmailCommand({
+    const result = await sesClient.send(new SendEmailCommand({
       // Friendly From: name to improve open rate and recognition
       FromEmailAddress: `Foot Solutions Briefing <${FROM_ADDRESS}>`,
       Destination: { ToAddresses: [TO_ADDRESS] },
-      // Replies go directly to the owner inbox, not the noreply alias
-      ReplyToAddresses: [TO_ADDRESS],
-      // Configure additional headers via the email content (Simple format
-      // supports Headers in SESv2)
+      // Note: intentionally NOT setting ReplyToAddresses to TO_ADDRESS —
+      // Reply-To equal to the recipient is a known spam-classifier
+      // trigger ("self-reply" pattern). Letting Gmail/Outlook fall back
+      // to the From address gives cleaner inbox placement.
       Content: {
         Simple: {
           Subject: { Data: subject, Charset: 'UTF-8' },
@@ -1036,7 +1046,8 @@ export const handler = async (event?: { trigger?: string }) => {
       // Send via the default configuration set (SES picks one if not specified).
       // Use ConfigurationSetName here later if you set up bounce/complaint tracking.
     }));
-    console.log(`Email sent to ${TO_ADDRESS}`);
+    sentMessageId = result.MessageId ?? null;
+    console.log(`Email sent to ${TO_ADDRESS} (MessageId=${sentMessageId ?? 'unknown'})`);
   } catch (err) {
     sendStatus = 'failed';
     sendError = (err as Error).message;
@@ -1056,6 +1067,7 @@ export const handler = async (event?: { trigger?: string }) => {
       status,
       sendStatus,
       sendError,
+      sentMessageId,
       to: TO_ADDRESS,
       from: FROM_ADDRESS,
       generatedAt: new Date().toISOString(),

@@ -76,24 +76,25 @@ export default function Dashboard() {
   });
 
   return (
-    <div className="min-h-screen bg-brand-50">
-      {/* Header */}
-      <header className="bg-white border-b border-brand-200 px-6 py-4">
+    <div className="min-h-screen">
+      {/* Header — sticky, translucent, blurred */}
+      <header className="app-header px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <h1 className="text-xl font-semibold text-brand-900">
-              Foot Solutions mngnt screen
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+              Foot Solutions
+              <span className="text-slate-400 font-normal ml-1.5">— Management</span>
             </h1>
             {user && (
-              <p className="text-sm text-brand-500 mt-0.5">{user.email}</p>
+              <p className="text-xs text-slate-500 mt-0.5">{user.email}</p>
             )}
           </div>
-          <div className="flex items-center gap-4 flex-shrink-0">
+          <div className="flex items-center gap-2 flex-shrink-0">
             <CentralTimeBadge />
             {isAdmin && (
               <button
                 onClick={() => setShowAdminPanel(true)}
-                className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+                className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:border-slate-300 transition-colors"
                 aria-label="Admin settings"
                 title="Configure visibility for non-admin users"
               >
@@ -103,7 +104,7 @@ export default function Dashboard() {
             )}
             <button
               onClick={handleSignOut}
-              className="flex items-center gap-2 text-sm text-brand-600 hover:text-brand-900 transition-colors"
+              className="btn-ghost"
               aria-label="Sign out"
             >
               <LogOut className="w-4 h-4" aria-hidden="true" />
@@ -115,7 +116,7 @@ export default function Dashboard() {
 
       {/* Single-column layout: tiles on top (full width), email feed
           centered below. Gives Daily Briefings more reading width. */}
-      <main className="max-w-7xl mx-auto px-6 py-8 space-y-6">
+      <main className="max-w-7xl mx-auto px-6 py-10 space-y-8">
         {/* Tile grid */}
         <div
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5"

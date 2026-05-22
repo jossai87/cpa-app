@@ -1,3 +1,104 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ──────────────────────────────────────────────────────────────────
+   Global look-and-feel tokens. Keeps changes centralized so a future
+   pass can re-skin without diving into every component.
+   ────────────────────────────────────────────────────────────────── */
+
+@layer base {
+  html {
+    /* Smoother fonts on macOS / iOS */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    /* Soft, slightly-warm slate gradient page background. Subtle enough
+       to avoid stealing focus from content but enough to add depth. */
+    background:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+      linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+    background-attachment: fixed;
+    background-color: #f8fafc;
+    color: #0f172a;
+  }
+
+  /* Tighter heading rhythm */
+  h1, h2, h3 {
+    letter-spacing: -0.015em;
+  }
+
+  /* Custom scrollbar — only on Webkit. Subtle, matches slate tokens. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.35);
+    border-radius: 8px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.55);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+
+  /* Fade-in for top-level pages so transitions feel less abrupt */
+  main {
+    animation: fadeUp 0.32s ease-out both;
+  }
+}
+
+@layer components {
+  /* Sticky translucent app header used by Dashboard / Sales / Gmail / Credentials */
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    background-color: rgba(255, 255, 255, 0.78);
+    border-bottom: 1px solid rgba(226, 232, 240, 0.7);
+  }
+
+  /* Soft elevated card — used as a base for tiles, KPI cards, etc. */
+  .surface {
+    background-color: #ffffff;
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 0.875rem; /* 14px — softer than the default 8 */
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+  .surface-hover {
+    transition: border-color 200ms ease, box-shadow 220ms ease, transform 220ms ease;
+  }
+  .surface-hover:hover {
+    border-color: rgba(148, 163, 184, 0.6);
+    box-shadow: 0 8px 24px -8px rgba(15, 23, 42, 0.12);
+    transform: translateY(-1px);
+  }
+
+  /* Ghost button — subtle, used for secondary actions */
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    border-radius: 0.625rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: rgb(71, 85, 105);
+    transition: background-color 160ms ease, color 160ms ease;
+  }
+  .btn-ghost:hover {
+    background-color: rgba(241, 245, 249, 0.9);
+    color: rgb(15, 23, 42);
+  }
+}
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

@@ -11,31 +11,36 @@ interface TileCardProps {
 
 /**
  * Dashboard tile card.
- * Active tiles are navigable links. Inactive tiles show a "Coming Soon" badge
- * and are rendered as non-interactive elements.
+ *
+ * Active tiles: soft white surface with a colored gradient icon container,
+ *               lifts on hover via the shared `.surface-hover` mixin.
+ * Inactive tiles: dashed border + muted icon, conveys "preview" state
+ *                 without the heavy-handed opacity blur.
  */
 export default function TileCard({ title, icon: Icon, href, active }: TileCardProps) {
-  const content = (
+  const inner = (
     <>
       <div
         className={clsx(
-          'flex items-center justify-center w-12 h-12 rounded-xl mb-4',
-          active ? 'bg-brand-100 text-brand-700' : 'bg-brand-50 text-brand-300'
+          'flex items-center justify-center w-14 h-14 rounded-2xl mb-4 ring-1 ring-inset transition-colors',
+          active
+            ? 'bg-gradient-to-br from-slate-50 to-slate-100 ring-slate-200/80 text-slate-700 group-hover:from-slate-100 group-hover:to-slate-200'
+            : 'bg-slate-50 ring-slate-200/60 text-slate-300'
         )}
         aria-hidden="true"
       >
-        <Icon className="w-6 h-6" />
+        <Icon className="w-6 h-6" strokeWidth={1.75} />
       </div>
       <span
         className={clsx(
-          'text-sm font-medium',
-          active ? 'text-brand-900' : 'text-brand-400'
+          'text-sm font-semibold tracking-tight',
+          active ? 'text-slate-900' : 'text-slate-400'
         )}
       >
         {title}
       </span>
       {!active && (
-        <span className="mt-2 inline-block text-xs font-medium bg-brand-100 text-brand-400 px-2 py-0.5 rounded-full">
+        <span className="mt-2 inline-block text-[10px] font-medium uppercase tracking-wider bg-slate-100 text-slate-400 px-2 py-0.5 rounded-full">
           Coming Soon
         </span>
       )}
@@ -47,9 +52,9 @@ export default function TileCard({ title, icon: Icon, href, active }: TileCardPr
       <div
         role="listitem"
         aria-label={`${title} — coming soon`}
-        className="flex flex-col items-center justify-center p-6 bg-white rounded-xl border border-brand-100 opacity-60 cursor-not-allowed select-none"
+        className="flex flex-col items-center justify-center px-6 py-7 rounded-2xl border border-dashed border-slate-200 bg-white/50 cursor-not-allowed select-none"
       >
-        {content}
+        {inner}
       </div>
     );
   }
@@ -59,9 +64,9 @@ export default function TileCard({ title, icon: Icon, href, active }: TileCardPr
       to={href}
       role="listitem"
       aria-label={title}
-      className="flex flex-col items-center justify-center p-6 bg-white rounded-xl border border-brand-200 hover:border-brand-400 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+      className="group surface surface-hover flex flex-col items-center justify-center px-6 py-7 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2"
     >
-      {content}
+      {inner}
     </Link>
   );
 }

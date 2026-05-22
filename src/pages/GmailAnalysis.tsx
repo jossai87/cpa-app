@@ -308,21 +308,22 @@ export default function GmailAnalysis() {
   const isRunning = status === 'running' || startRunMutation.isPending;
 
   return (
-    <div className="min-h-screen bg-brand-50">
+    <div className="min-h-screen">
       {/* Header */}
-      <header className="bg-white border-b border-brand-200 px-6 py-4">
+      <header className="app-header px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <Link
               to="/"
-              className="text-brand-500 hover:text-brand-900 transition-colors"
+              className="btn-ghost px-2"
               aria-label="Back to dashboard"
             >
-              <ArrowLeft className="w-5 h-5" />
+              <ArrowLeft className="w-4 h-4" />
+              <span className="hidden sm:inline">Dashboard</span>
             </Link>
             <div className="flex items-center gap-2">
               <Mail className="w-5 h-5 text-rose-600" />
-              <h1 className="text-xl font-semibold text-brand-900">Gmail Assistant</h1>
+              <h1 className="text-xl font-semibold tracking-tight text-slate-900">Gmail Assistant</h1>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">

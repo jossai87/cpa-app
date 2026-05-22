@@ -75,22 +75,22 @@ export default function Credentials() {
   }
 
   return (
-    <div className="min-h-screen bg-brand-50">
+    <div className="min-h-screen">
       {/* Header */}
-      <header className="bg-white border-b border-brand-200 px-6 py-4">
+      <header className="app-header px-6 py-4">
         <div className="max-w-5xl mx-auto flex items-center gap-4">
           <Link
             to="/"
-            className="flex items-center gap-1.5 text-sm text-brand-500 hover:text-brand-900 transition-colors"
+            className="btn-ghost"
             aria-label="Back to dashboard"
           >
             <ArrowLeft className="w-4 h-4" aria-hidden="true" />
             Dashboard
           </Link>
-          <h1 className="text-xl font-semibold text-brand-900">Credential Vault</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-slate-900">Credential Vault</h1>
           <button
             onClick={() => { setShowNew((v) => !v); setNewError(null); }}
-            className="ml-auto flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-brand-700 text-white hover:bg-brand-800 transition-colors"
+            className="ml-auto flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-xl bg-slate-900 text-white hover:bg-slate-800 transition-colors shadow-sm"
           >
             {showNew ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
             {showNew ? 'Cancel' : 'Add Credential'}
