@@ -3,12 +3,47 @@ import { AuthProvider, useAuth } from './lib/auth';
 import Login from './pages/Login';
 import Callback from './pages/Callback';
 import Dashboard from './pages/Dashboard';
+import OwnerHome from './pages/OwnerHome';
 import CpaTaxAssistant from './pages/CpaTaxAssistant';
 import Credentials from './pages/Credentials';
 import SalesRevenue from './pages/SalesRevenue';
 import GmailAnalysis from './pages/GmailAnalysis';
+import Campaigns from './pages/Campaigns';
 import Spinner from './components/Spinner';
 import ErrorBoundary from './components/ErrorBoundary';
+import FsAssistant from './components/FsAssistant';
+import { ADMIN_EMAIL } from './lib/admin';
+
+/**
+ * HomeRoute — picks the landing screen based on user role.
+ *   • Admin (jandoossai@gmail.com) → full module dashboard
+ *   • Non-admin (owner / staff)    → curated OwnerHome with the
+ *                                    six cards they actually use
+ *
+ * The floating FS Assistant chatbot stays mounted via ProtectedShell on
+ * both paths, so the chat-icon-in-corner UX is identical for everyone.
+ */
+function HomeRoute() {
+  const { user } = useAuth();
+  const isAdmin = user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  return isAdmin ? <Dashboard /> : <OwnerHome />;
+}
+
+/**
+ * ProtectedShell — wraps every authenticated route's element so the
+ * unified `<FsAssistant />` bubble mounts once and survives navigation
+ * (Task 16.1, Reqs 1.1, 1.2, 1.5). The bubble itself reads the Vite
+ * `VITE_ASSISTANT_ENABLED` flag and returns null when off, so the
+ * cutover (Task 18.1) is a single env-var flip.
+ */
+function ProtectedShell({ children }: { children: React.ReactNode }) {
+  return (
+    <ErrorBoundary>
+      {children}
+      <FsAssistant />
+    </ErrorBoundary>
+  );
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -25,10 +60,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/login" replace />;
   }
 
-  // Wrap each protected route in an error boundary so a runtime crash in
-  // one page doesn't blank the entire app — users can still navigate back
-  // to the dashboard or retry.
-  return <ErrorBoundary>{children}</ErrorBoundary>;
+  return <ProtectedShell>{children}</ProtectedShell>;
 }
 
 export default function App() {
@@ -45,7 +77,7 @@ export default function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <HomeRoute />
               </ProtectedRoute>
             }
           />
@@ -78,6 +110,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <GmailAnalysis />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/campaigns"
+            element={
+              <ProtectedRoute>
+                <Campaigns />
               </ProtectedRoute>
             }
           />

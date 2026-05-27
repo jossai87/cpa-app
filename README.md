@@ -59,6 +59,7 @@ VITE_APP_URL=https://<your-cloudfront-or-localhost>
 VITE_COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
 VITE_COGNITO_CLIENT_ID=XXXXXXXXXXXXXXXXXXXXXXXXXX
 VITE_COGNITO_DOMAIN=your-domain.auth.us-east-1.amazoncognito.com
+VITE_ADMIN_EMAIL=owner@example.com
 ```
 
 **2. Start the dev server:**

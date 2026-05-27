@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { AttachmentRow } from '../components/AttachmentChip';
 import { Link } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -21,7 +22,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { gmailMessageUrl, gmailSearchUrl } from '../lib/gmailLinks';
 import CentralTimeBadge from '../components/CentralTimeBadge';
-import GmailChat from '../components/GmailChat';
+import AccountGroupedList from '../components/AccountGroupedList';
+// GmailChat removed at FS Assistant cutover (Task 18.2). Component file
+// kept in src/components/GmailChat.tsx for the one-release rollback
+// window per Req 10.2 — delete after the 14-day soak (Phase 5).
 
 // ── Types (mirror lambda/gmail-analysis/index.ts) ─────────────────────
 
@@ -51,6 +55,9 @@ interface GmailInvoice {
   summary: string;
   sourceMessageId: string;
   sourceThreadId?: string;
+  /** Attachment metadata — populated when the cached message has attachments */
+  attachments?: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }>;
+  sourceAccount?: string;
 }
 interface GmailInquiry {
   from: string;
@@ -60,13 +67,17 @@ interface GmailInquiry {
   summary: string;
   sourceMessageId: string;
   sourceThreadId?: string;
+  /** Attachment metadata — populated when the cached message has attachments */
+  attachments?: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }>;
 }
 interface GmailFollowUp {
   title: string;
   why: string;
   suggestedAction: string;
+  urgency?: 'high' | 'medium' | 'low';
   sourceMessageIds: string[];
   sourceThreadIds?: string[];
+  sourceAccount?: string;
 }
 interface AnalysisResponse {
   overview: string;
@@ -81,6 +92,12 @@ interface AnalysisResponse {
   totalMessagesScanned: number;
   modelId: string;
   fromCache?: boolean;
+  /** Server-persisted IDs cleared via verify-on-clear. Used to hydrate
+   * the local "dismissed" sets so a refresh doesn't unhide cleared
+   * items. Empty when the analysis is fresh / no items have been
+   * cleared yet. */
+  dismissedFollowUpIds?: string[];
+  dismissedInvoiceIds?: string[];
 }
 
 const RANGE_OPTIONS = [7, 14, 30, 90, 180] as const;
@@ -240,6 +257,96 @@ export default function GmailAnalysis() {
   // server. Falls back to 14 on first load. This means navigating back to
   // the page won't trigger a "different range" auto-kick.
   const [days, setDays] = useState<number>(() => analysisQ.data?.rangeDays ?? 14);
+  // Track follow-up items dismissed by the user (by index within the current analysis).
+  // Resets when a new analysis runs. The note in the UI explains they'll reappear
+  // on the next scan if still unresolved.
+  const [dismissedFollowUps, setDismissedFollowUps] = useState<Set<number>>(new Set());
+
+  /**
+   * Verify-on-clear results. When the user clicks Clear we don't just
+   * dismiss locally — we ask Bedrock whether the thread actually wraps
+   * up the issue. If the verdict is "unresolved" or "inconclusive" we
+   * keep the item visible and stash the reason here for display.
+   *
+   * Keyed by the same `i` (sort-order index) used by `dismissedFollowUps`.
+   */
+  const [verifyVerdicts, setVerifyVerdicts] = useState<
+    Record<
+      number,
+      {
+        verdict: 'resolved' | 'unresolved' | 'inconclusive';
+        reason: string;
+        verifiedAt: string;
+        model: 'sonnet-4.6' | 'haiku-4.5' | 'short-circuit';
+      }
+    >
+  >({});
+
+  /** Per-item Clear-button spinner state. */
+  const [verifyingIndex, setVerifyingIndex] = useState<number | null>(null);
+
+  // Same state shape but for invoices. Kept separate so the two cards
+  // can be cleared independently and don't share index ranges.
+  const [dismissedInvoices, setDismissedInvoices] = useState<Set<number>>(new Set());
+  const [verifyInvoiceVerdicts, setVerifyInvoiceVerdicts] = useState<
+    Record<
+      number,
+      {
+        verdict: 'resolved' | 'unresolved' | 'inconclusive';
+        reason: string;
+        verifiedAt: string;
+        model: 'sonnet-4.6' | 'haiku-4.5' | 'short-circuit';
+      }
+    >
+  >({});
+  const [verifyingInvoiceIndex, setVerifyingInvoiceIndex] = useState<number | null>(null);
+
+  // Reset dismissed items when a fresh analysis lands. The server-side
+  // dismissed set is keyed by analysisGeneratedAt so we always start
+  // from clean local state, then layer the server's persisted IDs on
+  // in the next effect.
+  useEffect(() => {
+    setDismissedFollowUps(new Set());
+    setVerifyVerdicts({});
+    setVerifyingIndex(null);
+    setDismissedInvoices(new Set());
+    setVerifyInvoiceVerdicts({});
+    setVerifyingInvoiceIndex(null);
+  }, [analysisQ.data?.generatedAt]);
+
+  // Hydrate dismissed sets from the server-persisted IDs. Convert the
+  // server's id-strings (`${generatedAt}-${index}-${title.slice(0,60)}`)
+  // back into local indices by recomputing them in the same sort order
+  // the UI uses to render. Without this, refreshing the page brings
+  // cleared items back.
+  useEffect(() => {
+    const data = analysisQ.data;
+    if (!data?.generatedAt) return;
+    const followUpIds = new Set(data.dismissedFollowUpIds ?? []);
+    const invoiceIds = new Set(data.dismissedInvoiceIds ?? []);
+    if (followUpIds.size === 0 && invoiceIds.size === 0) return;
+
+    const order = { high: 0, medium: 1, low: 2, undefined: 1 } as const;
+    const fuSorted = [...(data.followUpsNeeded ?? [])].sort((a, b) => {
+      return (
+        (order[a?.urgency ?? 'undefined'] ?? 1) -
+        (order[b?.urgency ?? 'undefined'] ?? 1)
+      );
+    });
+    const newFu = new Set<number>();
+    fuSorted.forEach((f, i) => {
+      const id = `${data.generatedAt}-${i}-${(f?.title ?? '').slice(0, 60)}`;
+      if (followUpIds.has(id)) newFu.add(i);
+    });
+    if (newFu.size > 0) setDismissedFollowUps(newFu);
+
+    const newInv = new Set<number>();
+    (data.invoices ?? []).forEach((inv, i) => {
+      const id = `${data.generatedAt}-inv-${i}-${(inv?.vendor ?? '').slice(0, 60)}`;
+      if (invoiceIds.has(id)) newInv.add(i);
+    });
+    if (newInv.size > 0) setDismissedInvoices(newInv);
+  }, [analysisQ.data]);
   // If the server returns a cached range later than the initial render,
   // sync the selector once so the UI matches what's actually displayed.
   useEffect(() => {
@@ -276,6 +383,133 @@ export default function GmailAnalysis() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['gmail', 'cache-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['gmail', 'analyze'] });
+    },
+  });
+
+  /**
+   * Verify-on-Clear. Hits POST /gmail/follow-up/verify which decides if
+   * the thread is actually resolved. On "resolved" we dismiss locally;
+   * on "unresolved" / "inconclusive" we keep the item visible and stash
+   * the reason for the disclaimer banner.
+   *
+   * Cost: ≤$0.02/click (short-circuit free; Haiku ~$0.002; Sonnet ~$0.015).
+   */
+  const verifyFollowUpMutation = useMutation({
+    mutationFn: async (params: {
+      index: number;
+      followUp: GmailFollowUp;
+      analysisGeneratedAt: string | undefined;
+    }) => {
+      const { index, followUp, analysisGeneratedAt } = params;
+      const followUpId = `${analysisGeneratedAt ?? 'na'}-${index}-${(followUp.title ?? '').slice(0, 60)}`;
+      const res = await api.post<{
+        verdict: 'resolved' | 'unresolved' | 'inconclusive';
+        reason: string;
+        verifiedAt: string;
+        model: 'sonnet-4.6' | 'haiku-4.5' | 'short-circuit';
+      }>('/gmail/follow-up/verify', {
+        followUpId,
+        title: followUp.title,
+        why: followUp.why,
+        sourceMessageIds: followUp.sourceMessageIds ?? [],
+        sourceThreadIds: followUp.sourceThreadIds ?? [],
+        analysisGeneratedAt: analysisGeneratedAt ?? null,
+      });
+      return { ...res.data, index };
+    },
+    onMutate: ({ index }) => {
+      setVerifyingIndex(index);
+    },
+    onSettled: () => {
+      setVerifyingIndex(null);
+    },
+    onSuccess: (data) => {
+      const { index, verdict } = data;
+      if (verdict === 'resolved') {
+        setDismissedFollowUps((prev) => new Set([...prev, index]));
+        // Drop any prior unresolved/inconclusive verdict for this index.
+        setVerifyVerdicts((prev) => {
+          const next = { ...prev };
+          delete next[index];
+          return next;
+        });
+      } else {
+        setVerifyVerdicts((prev) => ({
+          ...prev,
+          [index]: {
+            verdict: data.verdict,
+            reason: data.reason,
+            verifiedAt: data.verifiedAt,
+            model: data.model,
+          },
+        }));
+      }
+    },
+  });
+
+  /**
+   * Same Verify-on-Clear pattern as follow-ups, but tuned for invoice
+   * closure (sends `kind: "invoice"` to the backend so the model checks
+   * payment / settlement language rather than generic conversation
+   * resolution).
+   */
+  const verifyInvoiceMutation = useMutation({
+    mutationFn: async (params: {
+      index: number;
+      invoice: GmailInvoice;
+      analysisGeneratedAt: string | undefined;
+    }) => {
+      const { index, invoice, analysisGeneratedAt } = params;
+      const followUpId = `${analysisGeneratedAt ?? 'na'}-inv-${index}-${(invoice.vendor ?? '').slice(0, 60)}`;
+      const sourceMessageIds = invoice.sourceMessageId ? [invoice.sourceMessageId] : [];
+      const sourceThreadIds = invoice.sourceThreadId ? [invoice.sourceThreadId] : [];
+      const res = await api.post<{
+        verdict: 'resolved' | 'unresolved' | 'inconclusive';
+        reason: string;
+        verifiedAt: string;
+        model: 'sonnet-4.6' | 'haiku-4.5' | 'short-circuit';
+      }>('/gmail/follow-up/verify', {
+        followUpId,
+        kind: 'invoice',
+        title: invoice.vendor,
+        why: invoice.summary,
+        sourceMessageIds,
+        sourceThreadIds,
+        analysisGeneratedAt: analysisGeneratedAt ?? null,
+        invoiceContext: {
+          vendor: invoice.vendor,
+          amount: invoice.amount,
+          dueDate: invoice.dueDate,
+        },
+      });
+      return { ...res.data, index };
+    },
+    onMutate: ({ index }) => {
+      setVerifyingInvoiceIndex(index);
+    },
+    onSettled: () => {
+      setVerifyingInvoiceIndex(null);
+    },
+    onSuccess: (data) => {
+      const { index, verdict } = data;
+      if (verdict === 'resolved') {
+        setDismissedInvoices((prev) => new Set([...prev, index]));
+        setVerifyInvoiceVerdicts((prev) => {
+          const next = { ...prev };
+          delete next[index];
+          return next;
+        });
+      } else {
+        setVerifyInvoiceVerdicts((prev) => ({
+          ...prev,
+          [index]: {
+            verdict: data.verdict,
+            reason: data.reason,
+            verifiedAt: data.verifiedAt,
+            model: data.model,
+          },
+        }));
+      }
     },
   });
 
@@ -541,17 +775,53 @@ export default function GmailAnalysis() {
                 {result.followUpsNeeded.length === 0 ? (
                   <EmptyState message="Inbox is clear — no obvious follow-ups." />
                 ) : (
-                  <ul className="space-y-3">
-                    {result.followUpsNeeded.map((f, i) => {
+                  <>
+                  <AccountGroupedList
+                    items={[...result.followUpsNeeded].sort((a, b) => {
+                      const order = { high: 0, medium: 1, low: 2, undefined: 1 };
+                      return (order[a.urgency ?? 'undefined'] ?? 1) - (order[b.urgency ?? 'undefined'] ?? 1);
+                    })}
+                    getAccount={(f) => f.sourceAccount}
+                  >
+                    {(f, i) => {
+                      if (dismissedFollowUps.has(i)) return null;
                       const linkIds = f.sourceThreadIds ?? f.sourceMessageIds ?? [];
                       const hasSingleId = linkIds.length === 1;
+                      const urgencyStyle = f.urgency === 'high'
+                        ? { border: 'border-red-200', bg: 'bg-red-50/60', badge: 'bg-red-100 text-red-700', label: '🔴 High' }
+                        : f.urgency === 'low'
+                          ? { border: 'border-slate-200', bg: 'bg-slate-50/40', badge: 'bg-slate-100 text-slate-500', label: '⚪ Low' }
+                          : { border: 'border-rose-100', bg: 'bg-rose-50/40', badge: 'bg-amber-100 text-amber-700', label: '🟡 Medium' };
                       return (
                         <li
-                          key={i}
-                          className="border border-rose-100 bg-rose-50/40 rounded-lg p-3"
+                          className={`border ${urgencyStyle.border} ${urgencyStyle.bg} rounded-lg p-3`}
                         >
-                          <p className="text-sm font-medium text-slate-900">{f.title}</p>
-                          <p className="text-xs text-slate-600 mt-1">{f.why}</p>
+                          <div className="flex items-start justify-between gap-2 mb-1">
+                            <p className="text-sm font-medium text-slate-900 flex-1">{f.title}</p>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {f.urgency && (
+                                <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${urgencyStyle.badge}`}>
+                                  {urgencyStyle.label}
+                                </span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  verifyFollowUpMutation.mutate({
+                                    index: i,
+                                    followUp: f,
+                                    analysisGeneratedAt: result.generatedAt,
+                                  })
+                                }
+                                disabled={verifyingIndex === i}
+                                className="text-[10px] text-slate-400 hover:text-slate-600 border border-slate-200 hover:border-slate-300 rounded px-1.5 py-0.5 transition disabled:opacity-50 disabled:cursor-wait"
+                                title="Verify this thread is resolved before clearing — uses Sonnet 4.6 to check the latest replies."
+                              >
+                                {verifyingIndex === i ? 'Checking…' : 'Clear'}
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-xs text-slate-600">{f.why}</p>
                           {hasSingleId ? (
                             <a
                               href={gmailMessageUrl(linkIds[0]!)}
@@ -570,10 +840,31 @@ export default function GmailAnalysis() {
                           {!hasSingleId && (
                             <MessageLinks ids={linkIds} label="Reply in Gmail" />
                           )}
+                          {verifyVerdicts[i] && (
+                            <div className="mt-2 px-2 py-1.5 rounded border border-amber-200 bg-amber-50 text-[11px] text-amber-900 leading-snug">
+                              <div className="font-medium">
+                                {verifyVerdicts[i]!.verdict === 'unresolved'
+                                  ? "Couldn't auto-clear: still unresolved"
+                                  : 'Verification inconclusive'}
+                              </div>
+                              <div className="text-amber-800">
+                                {verifyVerdicts[i]!.reason}
+                              </div>
+                              <div className="text-[10px] text-amber-700/80 mt-0.5">
+                                Verified just now · {verifyVerdicts[i]!.model}
+                              </div>
+                            </div>
+                          )}
                         </li>
                       );
-                    })}
-                  </ul>
+                    }}
+                  </AccountGroupedList>
+                  {dismissedFollowUps.size > 0 && (
+                    <p className="text-[10px] text-slate-400 mt-2 text-right">
+                      {dismissedFollowUps.size} cleared · will reappear on next scan if unresolved
+                    </p>
+                  )}
+                  </>
                 )}
               </section>
 
@@ -588,13 +879,19 @@ export default function GmailAnalysis() {
                 {result.invoices.length === 0 ? (
                   <EmptyState message="No invoices in this window." />
                 ) : (
-                  <ul className="space-y-2">
-                    {result.invoices.map((inv, i) => (
+                  <>
+                  <AccountGroupedList
+                    items={result.invoices}
+                    getAccount={(inv) => inv.sourceAccount}
+                    listClassName="space-y-2"
+                  >
+                    {(inv, i) => {
+                      if (dismissedInvoices.has(i)) return null;
+                      return (
                       <li
-                        key={i}
                         className="flex items-start justify-between gap-3 py-2 border-b last:border-0 border-slate-100"
                       >
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium text-slate-900">{inv.vendor}</p>
                           <p className="text-xs text-slate-600 mt-0.5">{inv.summary}</p>
                           {inv.dueDate && (
@@ -610,15 +907,60 @@ export default function GmailAnalysis() {
                             }
                             label="Open invoice"
                           />
+                          {inv.attachments && inv.attachments.length > 0 && (
+                            <AttachmentRow
+                              messageId={inv.sourceMessageId}
+                              attachments={inv.attachments}
+                            />
+                          )}
+                          {verifyInvoiceVerdicts[i] && (
+                            <div className="mt-2 px-2 py-1.5 rounded border border-amber-300 bg-amber-100 text-[11px] text-amber-900 leading-snug">
+                              <div className="font-medium">
+                                {verifyInvoiceVerdicts[i]!.verdict === 'unresolved'
+                                  ? "Couldn't auto-clear: invoice still appears unpaid"
+                                  : 'Verification inconclusive'}
+                              </div>
+                              <div className="text-amber-800">
+                                {verifyInvoiceVerdicts[i]!.reason}
+                              </div>
+                              <div className="text-[10px] text-amber-700/80 mt-0.5">
+                                Verified just now · {verifyInvoiceVerdicts[i]!.model}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        {inv.amount != null && (
-                          <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
-                            ${inv.amount.toFixed(2)}
-                          </span>
-                        )}
+                        <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                          {inv.amount != null && (
+                            <span className="text-sm font-semibold text-slate-900 whitespace-nowrap">
+                              ${inv.amount.toFixed(2)}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              verifyInvoiceMutation.mutate({
+                                index: i,
+                                invoice: inv,
+                                analysisGeneratedAt: result.generatedAt,
+                              })
+                            }
+                            disabled={verifyingInvoiceIndex === i}
+                            className="text-[10px] text-slate-400 hover:text-slate-600 border border-slate-200 hover:border-slate-300 rounded px-1.5 py-0.5 transition disabled:opacity-50 disabled:cursor-wait"
+                            title="Verify payment / closure before clearing — uses Sonnet 4.6 to read the latest replies."
+                          >
+                            {verifyingInvoiceIndex === i ? 'Checking…' : 'Clear'}
+                          </button>
+                        </div>
                       </li>
-                    ))}
-                  </ul>
+                      );
+                    }}
+                  </AccountGroupedList>
+                  {dismissedInvoices.size > 0 && (
+                    <p className="text-[10px] text-slate-400 mt-2 text-right">
+                      {dismissedInvoices.size} cleared · will reappear on next scan if unpaid
+                    </p>
+                  )}
+                  </>
                 )}
               </section>
             </div>
@@ -780,6 +1122,13 @@ export default function GmailAnalysis() {
                           {link && (
                             <MessageLinks ids={[link]} label="Open in Gmail" />
                           )}
+                          {/* Attachment chips — shown when the email had attachments */}
+                          {c.attachments && c.attachments.length > 0 && (
+                            <AttachmentRow
+                              messageId={c.sourceMessageId}
+                              attachments={c.attachments}
+                            />
+                          )}
                         </li>
                       );
                     })}
@@ -833,8 +1182,9 @@ export default function GmailAnalysis() {
         })()}
       </main>
 
-      {/* Floating chatbot */}
-      <GmailChat />
+      {/* ── FS Assistant has replaced the page-scoped Gmail chat. Bubble
+            mounts globally via <ProtectedShell />. Component file
+            retained for rollback per Task 18.2 / Req 10.2. ── */}
     </div>
   );
 }

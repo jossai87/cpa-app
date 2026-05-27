@@ -10,6 +10,8 @@ import { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Loader2, Bot } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import api from '../lib/api';
+import ChatMessageRenderer from './ChatMessageRenderer';
+import ChatHistory, { useChatHistory, type HistoryMessage } from './ChatHistory';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -39,6 +41,7 @@ export default function SalesChat() {
   const [draft, setDraft] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { save, resetSession } = useChatHistory('sales');
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -53,8 +56,13 @@ export default function SalesChat() {
   const chatMutation = useMutation({
     mutationFn: (msgs: ChatMessage[]) =>
       api.post<ChatResponse>('/pos/chat', { messages: msgs }).then(r => r.data),
-    onSuccess: (data) => {
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }]);
+    onSuccess: (data, vars) => {
+      const newMsg: ChatMessage = { role: 'assistant', content: data.reply };
+      const updated = [...vars, newMsg];
+      setMessages(updated);
+      // Auto-save the full conversation (skip the initial greeting at index 0)
+      const toSave = updated.slice(1); // drop the initial "Hi! I'm your..." greeting
+      if (toSave.length >= 2) void save(toSave);
     },
     onError: () => {
       setMessages(prev => [
@@ -73,6 +81,19 @@ export default function SalesChat() {
     setDraft('');
     // Send full conversation history for multi-turn context
     chatMutation.mutate(next);
+  }
+
+  function loadFromHistory(historyMessages: HistoryMessage[]) {
+    resetSession();
+    setMessages(historyMessages.map((m) => ({ role: m.role, content: m.content })));
+  }
+
+  function newChat() {
+    resetSession();
+    setMessages([{
+      role: 'assistant',
+      content: "Hi! I'm your Sales & Revenue assistant. Ask me anything about today's sales, inventory, staff performance, purchasing, or brand trends.",
+    }]);
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -116,13 +137,23 @@ export default function SalesChat() {
               <p className="text-sm font-semibold text-white leading-tight">Sales Assistant</p>
               <p className="text-[10px] text-blue-200">Powered by Amazon Bedrock · Live store data</p>
             </div>
-            <button
-              onClick={() => setOpen(false)}
-              className="text-white/70 hover:text-white transition-colors"
-              aria-label="Close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-2">
+              <ChatHistory type="sales" onLoadSession={loadFromHistory} accentClass="bg-blue-600" />
+              <button
+                onClick={newChat}
+                className="text-white/70 hover:text-white transition-colors text-[10px] border border-white/30 rounded px-1.5 py-0.5"
+                title="New conversation"
+              >
+                New
+              </button>
+              <button
+                onClick={() => setOpen(false)}
+                className="text-white/70 hover:text-white transition-colors"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* Messages */}
@@ -139,7 +170,11 @@ export default function SalesChat() {
                       : 'bg-slate-100 text-slate-800 rounded-bl-sm'
                   }`}
                 >
-                  {msg.content}
+                  {msg.role === 'assistant' ? (
+                    <ChatMessageRenderer content={msg.content} isUser={false} />
+                  ) : (
+                    msg.content
+                  )}
                 </div>
               </div>
             ))}

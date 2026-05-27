@@ -1,9 +1,9 @@
 import { useState, useRef } from 'react';
-import { Briefcase, FileDown, Paperclip, Trash2, X } from 'lucide-react';
-import { useQueryClient } from '@tanstack/react-query';
+import { Briefcase, FileDown, Paperclip, Trash2, X, Send, Check, Loader2, Package } from 'lucide-react';
+import { useQueryClient, useMutation } from '@tanstack/react-query';
 import api from '../lib/api';
 import Spinner from './Spinner';
-import { downloadZip, type ZipFile } from '../lib/zip';
+import { downloadZip, buildZip, type ZipFile } from '../lib/zip';
 import { buildCsvSections, csvNum, type CsvSection } from '../lib/csv';
 import type { TaxFormData, PersistedDocument, TaxSession } from '../types';
 
@@ -35,10 +35,33 @@ export default function CpaPackage({ getFormData, recentSession, documents }: Pr
     | { phase: 'error'; message: string }
   >({ phase: 'idle' });
 
-  // CPA recipient info (optional, included in README)
-  const [cpaName, setCpaName] = useState('');
-  const [cpaEmail, setCpaEmail] = useState('');
+  // CPA recipient info — pre-filled with Paul Joseph, editable
+  const [cpaName, setCpaName] = useState('Paul Joseph');
+  const [cpaEmail, setCpaEmail] = useState('ppjosephcpa@aol.com');
   const [businessNotes, setBusinessNotes] = useState('');
+
+  // Send-to-CPA state
+  const [sendTtlHours, setSendTtlHours] = useState(48);
+  const sendMut = useMutation({
+    mutationFn: (payload: {
+      sessionId: string;
+      recipientName: string;
+      recipientEmail: string;
+      ttlHours: number;
+      notes: string;
+    }) => api.post<{ message: string; expiresAt: string; packageId: string }>(
+      '/tax/cpa-package/send', payload
+    ).then((r) => r.data),
+  });
+
+  // "Create & attach" state — tracks building the zip for upload
+  const [attaching, setAttaching] = useState<
+    | { phase: 'idle' }
+    | { phase: 'building'; total: number; done: number }
+    | { phase: 'uploading' }
+    | { phase: 'done'; fileName: string }
+    | { phase: 'error'; message: string }
+  >({ phase: 'idle' });
 
   const supportingDocs = (documents ?? []).filter(
     (d) => d.docType === 'cpa-supporting'
@@ -476,74 +499,97 @@ export default function CpaPackage({ getFormData, recentSession, documents }: Pr
     };
   }
 
-  async function buildAndDownloadPackage() {
+  async function buildZipFiles(
+    onProgress: (done: number, total: number) => void
+  ): Promise<{ files: ZipFile[]; zipName: string }> {
     const allDocs = documents ?? [];
     const formData = getFormData ? getFormData() : undefined;
-    setBuilding({ phase: 'fetching', total: allDocs.length, done: 0 });
+    const files: ZipFile[] = [];
 
-    try {
-      const files: ZipFile[] = [];
-      // 1) README
-      files.push({ name: 'README.txt', data: buildReadme(formData) });
-      // 2) Tax summary
-      files.push({ name: 'tax_summary.csv', data: '\uFEFF' + buildTaxSummaryCsv(formData) });
-      // 3) Tax analysis (if available)
-      const analysis = buildAnalysisCsv();
-      if (analysis) {
-        files.push({ name: 'tax_analysis.csv', data: '\uFEFF' + analysis });
-      }
-      // 4) Manifest
-      files.push({ name: 'manifest.csv', data: '\uFEFF' + buildManifestCsv() });
+    files.push({ name: 'README.txt', data: buildReadme(formData) });
+    files.push({ name: 'tax_summary.csv', data: '\uFEFF' + buildTaxSummaryCsv(formData) });
+    const analysis = buildAnalysisCsv();
+    if (analysis) files.push({ name: 'tax_analysis.csv', data: '\uFEFF' + analysis });
+    files.push({ name: 'manifest.csv', data: '\uFEFF' + buildManifestCsv() });
 
-      // 5) Source documents — fetch in parallel but cap concurrency
-      const concurrency = 4;
-      const queue = [...allDocs];
-      let done = 0;
-      const errored: string[] = [];
+    const concurrency = 4;
+    const queue = [...allDocs];
+    let done = 0;
+    const errored: string[] = [];
 
-      async function worker() {
-        while (queue.length > 0) {
-          const d = queue.shift();
-          if (!d) return;
-          try {
-            const { bytes, inlineExt } = await fetchDocBytes(d.docId);
-            const ext = d.fileName.includes('.')
-              ? '.' + d.fileName.split('.').pop()
-              : (inlineExt ?? '');
-            const safeBase = (
-              d.fileName.includes('.')
-                ? d.fileName
-                : d.fileName + ext
-            ).replace(/[^A-Za-z0-9._-]+/g, '_');
-            const idx = String(allDocs.indexOf(d) + 1).padStart(3, '0');
-            files.push({
-              name: `documents/${idx}_${safeBase}`,
-              data: bytes,
-            });
-          } catch (err) {
-            errored.push(`${d.fileName}: ${(err as Error).message}`);
-          } finally {
-            done++;
-            setBuilding({ phase: 'fetching', total: allDocs.length, done });
-          }
+    async function worker() {
+      while (queue.length > 0) {
+        const d = queue.shift();
+        if (!d) return;
+        try {
+          const { bytes, inlineExt } = await fetchDocBytes(d.docId);
+          const ext = d.fileName.includes('.') ? '.' + d.fileName.split('.').pop() : (inlineExt ?? '');
+          const safeBase = (d.fileName.includes('.') ? d.fileName : d.fileName + ext).replace(/[^A-Za-z0-9._-]+/g, '_');
+          const idx = String(allDocs.indexOf(d) + 1).padStart(3, '0');
+          files.push({ name: `documents/${idx}_${safeBase}`, data: bytes });
+        } catch (err) {
+          errored.push(`${d.fileName}: ${(err as Error).message}`);
+        } finally {
+          done++;
+          onProgress(done, allDocs.length);
         }
       }
+    }
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (errored.length > 0) files.push({ name: 'documents/_download_errors.txt', data: errored.join('\r\n') });
 
-      await Promise.all(Array.from({ length: concurrency }, worker));
+    const stamp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago' }).format(new Date());
+    const safeCpa = cpaName.trim() ? cpaName.trim().replace(/[^A-Za-z0-9-]+/g, '-') + '_' : '';
+    const zipName = `FootSolutions_CPA_Package_${safeCpa}${stamp}.zip`;
+    return { files, zipName };
+  }
 
-      if (errored.length > 0) {
-        files.push({
-          name: 'documents/_download_errors.txt',
-          data: errored.join('\r\n'),
-        });
-      }
+  async function createAndAttachPackage() {
+    setAttaching({ phase: 'building', total: (documents ?? []).length, done: 0 });
+    try {
+      const { files, zipName } = await buildZipFiles((done, total) =>
+        setAttaching({ phase: 'building', total, done })
+      );
 
+      setAttaching({ phase: 'uploading' });
+
+      // Build the zip blob using the existing buildZip helper (no extra deps)
+      const zipBlob = buildZip(files);
+      const zipFile = new File([zipBlob], zipName, { type: 'application/zip' });
+
+      // Upload via the same supporting-doc flow
+      const urlResp = await api.post<{ uploadUrl: string; objectKey: string }>(
+        '/documents/upload-url',
+        { fileName: zipName, contentType: 'application/zip', docType: 'cpa-supporting' }
+      );
+      const putResp = await fetch(urlResp.data.uploadUrl, { method: 'PUT', body: zipFile });
+      if (!putResp.ok) throw new Error(`Upload failed: ${putResp.status}`);
+      await api.post('/documents/register-supporting', {
+        objectKey: urlResp.data.objectKey,
+        fileName: zipName,
+        contentType: 'application/zip',
+        notes: 'Auto-generated CPA package',
+      });
+
+      void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      setAttaching({ phase: 'done', fileName: zipName });
+      setTimeout(() => setAttaching({ phase: 'idle' }), 5000);
+    } catch (err) {
+      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? (err as Error).message;
+      setAttaching({ phase: 'error', message: msg });
+      setTimeout(() => setAttaching({ phase: 'idle' }), 4000);
+    }
+  }
+
+  async function buildAndDownloadPackage() {
+    const allDocs = documents ?? [];
+    setBuilding({ phase: 'fetching', total: allDocs.length, done: 0 });
+    try {
+      const { files, zipName } = await buildZipFiles((done, total) =>
+        setBuilding({ phase: 'fetching', total, done })
+      );
       setBuilding({ phase: 'zipping' });
-      const stamp = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'America/Chicago',
-      }).format(new Date());
-      const safeCpa = cpaName.trim() ? cpaName.trim().replace(/[^A-Za-z0-9-]+/g, '-') + '_' : '';
-      downloadZip(`FootSolutions_CPA_Package_${safeCpa}${stamp}.zip`, files);
+      downloadZip(zipName, files);
       setBuilding({ phase: 'done' });
       setTimeout(() => setBuilding({ phase: 'idle' }), 4000);
     } catch (err) {
@@ -636,10 +682,45 @@ export default function CpaPackage({ getFormData, recentSession, documents }: Pr
           accept=".pdf,.csv,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg,.txt"
           className="hidden"
         />
+
+        {/* Create & attach CPA package */}
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <button
+            type="button"
+            disabled={
+              attaching.phase === 'building' ||
+              attaching.phase === 'uploading'
+            }
+            onClick={() => void createAndAttachPackage()}
+            className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed"
+          >
+            {attaching.phase === 'building' || attaching.phase === 'uploading' ? (
+              <><Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {attaching.phase === 'uploading'
+                  ? 'Uploading…'
+                  : `Building… ${attaching.phase === 'building' ? `${attaching.done}/${attaching.total}` : ''}`}
+              </>
+            ) : (
+              <><Package className="w-3.5 h-3.5" /> Create &amp; attach CPA package</>
+            )}
+          </button>
+
+          {attaching.phase === 'done' && (
+            <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 inline-flex items-center gap-1">
+              <Check className="w-3 h-3" /> Attached: {attaching.fileName}
+            </span>
+          )}
+          {attaching.phase === 'error' && (
+            <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 inline-flex items-center gap-1">
+              <X className="w-3 h-3" /> {attaching.message}
+            </span>
+          )}
+        </div>
+
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700"
+          className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded bg-slate-600 text-white hover:bg-slate-700"
         >
           <Paperclip className="w-3.5 h-3.5" />
           Choose files
@@ -728,7 +809,7 @@ export default function CpaPackage({ getFormData, recentSession, documents }: Pr
       </div>
 
       {/* Build button + progress */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3 mb-6">
         <button
           type="button"
           onClick={() => void buildAndDownloadPackage()}
@@ -765,6 +846,107 @@ export default function CpaPackage({ getFormData, recentSession, documents }: Pr
           <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 inline-flex items-center gap-1.5">
             <X className="w-3 h-3" /> {building.message}
           </span>
+        )}
+      </div>
+
+      {/* ── Send to CPA ─────────────────────────────────────────────── */}
+      <div className="border-t border-slate-200 pt-5">
+        <div className="flex items-center gap-2 mb-3">
+          <Send className="w-4 h-4 text-indigo-600" />
+          <h3 className="text-sm font-semibold text-slate-800">Send to CPA</h3>
+          <span className="text-[11px] text-slate-400 ml-1">
+            Emails a secure download link to your CPA + the password to you
+          </span>
+        </div>
+
+        {!recentSession?.result ? (
+          <p className="text-xs text-slate-500 bg-slate-50 rounded-md px-3 py-2 border border-slate-200">
+            Run a tax analysis first — the package requires a completed session.
+          </p>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">CPA name</label>
+                <input
+                  type="text"
+                  value={cpaName}
+                  onChange={(e) => setCpaName(e.target.value)}
+                  placeholder="Paul Joseph"
+                  className="w-full text-sm border border-slate-300 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">CPA email</label>
+                <input
+                  type="email"
+                  value={cpaEmail}
+                  onChange={(e) => setCpaEmail(e.target.value)}
+                  placeholder="ppjosephcpa@aol.com"
+                  className="w-full text-sm border border-slate-300 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 mb-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Link expires after</label>
+                <select
+                  value={sendTtlHours}
+                  onChange={(e) => setSendTtlHours(Number(e.target.value))}
+                  className="text-sm border border-slate-300 rounded px-3 py-1.5 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                >
+                  <option value={24}>24 hours</option>
+                  <option value={48}>48 hours</option>
+                  <option value={72}>72 hours</option>
+                  <option value={168}>7 days</option>
+                </select>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-4 flex-1">
+                🔒 CPA gets the download link — a unique, expiring URL that only works for{' '}
+                <strong>{sendTtlHours}h</strong>. You get a send confirmation at{' '}
+                <span className="font-medium text-slate-600">dreamthatbuild@gmail.com</span>.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={!cpaEmail.includes('@') || sendMut.isPending}
+                onClick={() => {
+                  if (!recentSession?.sessionId) return;
+                  sendMut.reset();
+                  sendMut.mutate({
+                    sessionId: recentSession.sessionId,
+                    recipientName: cpaName.trim() || 'CPA',
+                    recipientEmail: cpaEmail.trim(),
+                    ttlHours: sendTtlHours,
+                    notes: businessNotes.trim(),
+                  });
+                }}
+                className="inline-flex items-center gap-1.5 text-sm px-4 py-2 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-not-allowed"
+              >
+                {sendMut.isPending ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Sending…</>
+                ) : (
+                  <><Send className="w-3.5 h-3.5" /> Send to CPA</>
+                )}
+              </button>
+
+              {sendMut.isSuccess && (
+                <span className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1 inline-flex items-center gap-1">
+                  <Check className="w-3 h-3" /> {sendMut.data.message}
+                </span>
+              )}
+              {sendMut.isError && (
+                <span className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1 inline-flex items-center gap-1">
+                  <X className="w-3 h-3" />
+                  {(sendMut.error as { response?: { data?: { error?: string } } })
+                    ?.response?.data?.error ?? 'Send failed. Please try again.'}
+                </span>
+              )}
+            </div>
+          </>
         )}
       </div>
     </section>

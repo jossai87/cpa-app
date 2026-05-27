@@ -3,11 +3,10 @@ import {
   Calculator,
   KeyRound,
   TrendingUp,
-  Users,
-  ClipboardCheck,
   LogOut,
   ShieldCheck,
   Mail,
+  Megaphone,
 } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { useAdmin } from '../lib/admin';
@@ -15,6 +14,7 @@ import TileCard from '../components/TileCard';
 import CentralTimeBadge from '../components/CentralTimeBadge';
 import AdminSettings from '../components/AdminSettings';
 import EmailFeed from '../components/EmailFeed';
+import CostBadge from '../components/CostBadge';
 
 const ALL_TILES = [
   {
@@ -23,6 +23,7 @@ const ALL_TILES = [
     href: '/sales',
     active: true,
     visibilityKey: null,
+    adminOnly: false,
   },
   {
     title: 'Gmail Assistant',
@@ -30,6 +31,7 @@ const ALL_TILES = [
     href: '/gmail',
     active: true,
     visibilityKey: 'dashboard.tile.gmail' as const,
+    adminOnly: false,
   },
   {
     title: 'CPA Tax Assistant',
@@ -37,6 +39,7 @@ const ALL_TILES = [
     href: '/tax',
     active: true,
     visibilityKey: 'dashboard.tile.tax' as const,
+    adminOnly: false,
   },
   {
     title: 'Credentials',
@@ -44,20 +47,15 @@ const ALL_TILES = [
     href: '/credentials',
     active: true,
     visibilityKey: null,
+    adminOnly: false,
   },
   {
-    title: 'Payroll',
-    icon: Users,
-    href: '/payroll',
-    active: false,
-    visibilityKey: 'dashboard.tile.payroll' as const,
-  },
-  {
-    title: 'Franchise Compliance',
-    icon: ClipboardCheck,
-    href: '/compliance',
-    active: false,
-    visibilityKey: 'dashboard.tile.compliance' as const,
+    title: 'Campaign',
+    icon: Megaphone,
+    href: '/campaigns',
+    active: true,
+    visibilityKey: null,
+    adminOnly: true,
   },
 ];
 
@@ -71,6 +69,7 @@ export default function Dashboard() {
   };
 
   const tiles = ALL_TILES.filter((tile) => {
+    if (tile.adminOnly && !isAdmin) return false;
     if (!tile.visibilityKey) return true;
     return isVisible(tile.visibilityKey);
   });
@@ -91,6 +90,7 @@ export default function Dashboard() {
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <CentralTimeBadge />
+            <CostBadge />
             {isAdmin && (
               <button
                 onClick={() => setShowAdminPanel(true)}

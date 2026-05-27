@@ -21,7 +21,7 @@ import {
   APIGatewayProxyResultV2,
 } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, GetCommand, QueryCommand, PutCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import {
   BedrockRuntimeClient,
   ConverseCommand,
@@ -30,105 +30,51 @@ import {
   type Tool,
   type ToolResultContentBlock,
 } from '@aws-sdk/client-bedrock-runtime';
-import {
-  cacheQuery,
-  cacheRead,
-  cacheVendorActivity,
-  type CachedQueryArgs,
-} from '../gmail-analysis/cache';
+import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import * as salesTools from './tools';
+import type { AttachmentRef, ToolContext } from './helpers';
+import { todayStr } from './helpers';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const bedrockClient = new BedrockRuntimeClient({ region: 'us-east-1' });
+const lambdaClient = new LambdaClient({ region: 'us-east-1' });
 
 const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
 const MODEL_ID = process.env['BEDROCK_MODEL_ID'] ?? 'us.amazon.nova-pro-v1:0';
+const GMAIL_ANALYSIS_FN = process.env['GMAIL_ANALYSIS_FN'] ?? 'foot-solutions-gmail-analysis';
 
 // ── Helpers ──────────────────────────────────────────────────────────
-
-const STORE_TZ = 'America/Chicago';
-
-function ctDateStr(d = new Date()): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: STORE_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).format(d);
-}
-function todayStr(): string { return ctDateStr(); }
-function daysAgo(n: number): string {
-  const d = new Date(); d.setUTCDate(d.getUTCDate() - n); return ctDateStr(d);
-}
+// Date / number / vendor helpers live in `./helpers.ts` so the extracted
+// per-tool functions in `./tools/*` and the dispatcher below share one
+// source of truth.
 
 function json(statusCode: number, body: unknown): APIGatewayProxyResultV2 {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
 }
 
-function round2(n: number) { return Math.round(n * 100) / 100; }
-
-// ── Vendor contact directory (mirrors SalesRevenue.tsx) ──────────────
-// Single source of truth for vendor phone, email, rep, and account info.
-// The agent uses this via get_vendor_contacts before falling back to Gmail.
-
-const VENDOR_CONTACTS: Record<string, {
-  phone?: string; email?: string; website?: string;
-  rep?: { name: string; phone?: string; email?: string; account?: string };
-  aliases?: string[];
-}> = {
-  'BROOKS':           { phone: '1-800-227-6657', email: 'retailer@brooksrunning.com', website: 'https://www.brooksrunning.com', rep: { name: 'Jacob Brooks — Territory Mgr, North TX/OK', phone: '239-839-7971', email: 'Jacob.brooks@brooksrunning.com' } },
-  'SAUCONY':          { phone: '1-800-282-6575', email: 'customerservice@saucony.com', website: 'https://www.saucony.com' },
-  'DANSKO':           { phone: '1-800-326-7564', email: 'moreinfo@dansko.com', website: 'https://www.dansko.com' },
-  'VIONIC':           { phone: '1-800-832-9255', email: 'info@vionicshoes.com', website: 'https://www.vionicshoes.com' },
-  'AETREX':           { phone: '1-888-526-2739', email: 'help@aetrex.com', website: 'https://www.aetrex.com' },
-  'DREW':             { phone: '1-800-837-3739', email: 'customerservice@drewshoe.com', website: 'https://www.drewshoe.com' },
-  'FINN USA':         { phone: '1-877-353-6642', email: 'orders@finncomfortusa.net', website: 'https://www.finncomfortusa.net' },
-  'MEPHISTO':         { phone: '1-615-771-5900', email: 'info@mephistousa.com', website: 'https://mephistousa.com' },
-  'ROCKPORT':         { phone: '1-800-762-5767', email: 'consumercare@help.rockport.com', website: 'https://www.rockport.com' },
-  'OLUKAI':           { phone: '1-877-789-5131', email: 'info@olukai.com', website: 'https://olukai.com' },
-  'HAFLINGER COMFORT FOOTWEAR': { phone: '1-800-551-7556', email: 'help@haflinger.com', website: 'https://us.haflinger.com' },
-  'WALDLAUFER':       { website: 'https://waldlauferfootwear.com' },
-  'GIESSWEIN':        { phone: '+43-5337-6135-0', email: 'shop@giesswein.com', website: 'https://us.giesswein.com' },
-  'SANITA':           { website: 'https://www.sanita.com' },
-  'FEETURES':         { email: 'hello@feetures.com', website: 'https://feetures.com' },
-  'CALERES':          { phone: '1-888-509-8200', email: 'retailerservices@caleres.com', website: 'https://www.caleres.com' },
-  'P.W.MINOR':        { phone: '1-585-343-1500', email: 'info@pwminor.com', website: 'https://www.pwminor.com' },
-  'PEDAG INTERNATIONAL': { email: 'info@pedag.com', website: 'https://pedagusa.com' },
-  'EARTH BRAND SHOES': { website: 'https://www.earthbrands.com' },
-  'KUMFS/ZIERA':      { website: 'https://www.zierausa.com' },
-  'YALEET':           { phone: '516-465-6268', website: 'https://www.naot.com', aliases: ['NAOT'], rep: { name: 'Joey DeWitt — Sales Rep', phone: '817-975-3365' } },
-  'AMERIBAG':         { phone: '1-800-AMERIBAG', website: 'https://www.ameribag.com' },
-  'FIDELIO':          { phone: '414-778-2288', website: 'https://www.berkemann.com', aliases: ['RUBY LEATHER', 'FIDELIO (RUBY LEATHER)'] },
-  'BERKEMANN':        { website: 'https://www.berkemann.com' },
-  'JUSTIN BLAIR':     { phone: '800-566-0664', website: 'https://www.burtendistribution.com' },
-  'SHU-RE-NU':        { email: 'tbogumill@shu-re-nu.com', rep: { name: 'Tammy Bogumill' } },
-  'INSTRIDE':         { phone: '866-969-3338', website: 'https://www.xeleroshoes.com', aliases: ['XELERO'] },
-  'THORLO':           { website: 'https://www.thorlo.com' },
-  'HOKA':             { phone: '1-888-463-4652', website: 'https://www.hoka.com' },
-  'APEX':             { phone: '800-252-2739', email: 'Lisa.fryberger@ohi.net', website: 'https://www.apexfoot.com', rep: { name: 'Lisa Fryberger', phone: '631-615-4176', account: '97378' } },
-  'PEDORS':           { phone: '1-800-750-6729', website: 'https://www.pedors.com' },
-  'PEDIFIX':          { phone: '1-800-424-5561', website: 'https://www.pedifix.com' },
-};
-
-/** Look up a vendor by name, case-insensitively, also checking aliases. */
-function lookupVendor(name: string): { key: string; data: typeof VENDOR_CONTACTS[string] } | null {
-  const upper = name.toUpperCase().trim();
-  // Direct match
-  for (const [key, data] of Object.entries(VENDOR_CONTACTS)) {
-    if (key.toUpperCase() === upper) return { key, data };
-  }
-  // Alias match
-  for (const [key, data] of Object.entries(VENDOR_CONTACTS)) {
-    if (data.aliases?.some(a => a.toUpperCase() === upper)) return { key, data };
-  }
-  // Partial match (contains)
-  for (const [key, data] of Object.entries(VENDOR_CONTACTS)) {
-    if (key.toUpperCase().includes(upper) || upper.includes(key.toUpperCase())) return { key, data };
-  }
-  return null;
-}
-
 // ── Tool definitions ─────────────────────────────────────────────────
 
 const TOOLS: Tool[] = [
+  {
+    toolSpec: {
+      name: 'call_inbox_assistant',
+      description: `Search the owner's Gmail inbox cache to answer questions about emails, vendors, invoices, customer threads, or specific people. Use this when the question requires email context — e.g. "did Brooks email us?", "what invoices are pending?", "last email from Nancy?". Returns raw cache results that you should synthesize into a clear answer. ALWAYS announce to the user that you are checking the inbox before calling this tool.`,
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: 'The question to ask the Inbox Assistant, phrased as a standalone query with full context.',
+            },
+          },
+          required: ['question'],
+        },
+      },
+    },
+  },
   {
     toolSpec: {
       name: 'get_vendor_contacts',
@@ -432,7 +378,7 @@ const TOOLS: Tool[] = [
   {
     toolSpec: {
       name: 'cache_read',
-      description: 'Read full body of a cached email by id (and dateOnly for speed).',
+      description: 'Read full body of a cached email by id (and dateOnly for speed). The response includes an `attachments` array — mention filenames to the user when present.',
       inputSchema: {
         json: {
           type: 'object',
@@ -449,576 +395,41 @@ const TOOLS: Tool[] = [
 
 // ── Tool execution ────────────────────────────────────────────────────
 
-async function executeTool(name: string, input: Record<string, unknown>, callerUserId?: string): Promise<string> {
-  const today = todayStr();
-  const currentYear = today.slice(0, 4);
+async function executeTool(name: string, input: Record<string, unknown>, callerUserId?: string, attachmentCollector?: Array<{ messageId: string; subject?: string; attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> }>): Promise<string> {
+  // Slim dispatcher — each tool's logic lives in `./tools/<name>.ts`.
+  // The legacy `/pos/chat` Lambda is the only caller; the future Strands
+  // Sales_Agent wraps these same functions as `tool({...})` callbacks
+  // (Task 6.1 in the fs-assistant-orchestrator spec).
+  const ctx: ToolContext = {
+    docClient,
+    tableName: TABLE_NAME,
+    ownerUserId: OWNER_USER_ID,
+    callerUserId,
+    attachmentCollector: attachmentCollector as AttachmentRef[] | undefined,
+  };
+  const args = input as Record<string, never>;
 
   switch (name) {
-
-    case 'get_vendor_contacts': {
-      const vendorName = input['vendor_name'] as string | undefined;
-      if (vendorName && vendorName.trim()) {
-        const match = lookupVendor(vendorName.trim());
-        if (!match) {
-          return JSON.stringify({
-            found: false,
-            searched: vendorName,
-            message: `No contact info found for "${vendorName}" in the vendor directory. Try get_purchasing to see the full vendor list from Heartland.`,
-          });
-        }
-        const { key, data } = match;
-        return JSON.stringify({
-          found: true,
-          vendorName: key,
-          aliases: data.aliases ?? [],
-          phone: data.phone ?? null,
-          email: data.email ?? null,
-          website: data.website ?? null,
-          rep: data.rep ? {
-            name: data.rep.name,
-            phone: data.rep.phone ?? null,
-            email: data.rep.email ?? null,
-            accountNumber: data.rep.account ?? null,
-          } : null,
-        });
-      }
-      // Return all vendors
-      const all = Object.entries(VENDOR_CONTACTS).map(([key, data]) => ({
-        vendorName: key,
-        aliases: data.aliases ?? [],
-        phone: data.phone ?? null,
-        email: data.email ?? null,
-        website: data.website ?? null,
-        rep: data.rep ? {
-          name: data.rep.name,
-          phone: data.rep.phone ?? null,
-          email: data.rep.email ?? null,
-          accountNumber: data.rep.account ?? null,
-        } : null,
-      }));
-      return JSON.stringify({ vendors: all, count: all.length });
-    }
-
-    case 'get_sales_summary': {
-      const from = (input['from_date'] as string) || daysAgo(30);
-      const to = (input['to_date'] as string) || today;
-      const result = await docClient.send(new QueryCommand({
-        TableName: TABLE_NAME,
-        KeyConditionExpression: 'userId = :uid AND sk BETWEEN :from AND :to',
-        ExpressionAttributeValues: {
-          ':uid': OWNER_USER_ID,
-          ':from': `POS#DAILY#${from}`,
-          ':to': `POS#DAILY#${to}`,
-        },
-      }));
-      const items = result.Items ?? [];
-      type Rollup = { date: string; count: number; totalAmount: number; totalDiscounts: number };
-      let revenue = 0, tickets = 0, discounts = 0;
-      const daily: Array<{ date: string; revenue: number; tickets: number }> = [];
-      for (const item of items) {
-        const r = item['rollup'] as Rollup | undefined;
-        if (!r) continue;
-        revenue += r.totalAmount ?? 0;
-        tickets += r.count ?? 0;
-        discounts += r.totalDiscounts ?? 0;
-        daily.push({ date: r.date, revenue: round2(r.totalAmount), tickets: r.count });
-      }
-      daily.sort((a, b) => a.date.localeCompare(b.date));
-      return JSON.stringify({
-        from, to,
-        totalRevenue: round2(revenue),
-        totalTickets: tickets,
-        totalDiscounts: round2(discounts),
-        avgTicket: tickets > 0 ? round2(revenue / tickets) : 0,
-        daysWithSales: daily.length,
-        dailyBreakdown: daily,
-      });
-    }
-
-    case 'get_returns_data': {
-      const year = (input['year'] as string) === 'current' || !input['year'] ? currentYear : input['year'] as string;
-      const sk = year === currentYear ? 'POS#REPORTING#SALES' : `POS#REPORTING#YEAR#${year}`;
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk } }));
-      const returnRows = (result.Item?.['returnRows'] as Array<Record<string, unknown>> | undefined) ?? [];
-      const data = returnRows
-        .map(r => {
-          const brand = String(r['item.custom@brand'] ?? 'Unknown');
-          const grossSales = round2((r['source_sales.gross_sales'] as number) ?? 0);
-          const grossReturns = round2(Math.abs((r['source_sales.gross_returns'] as number) ?? 0));
-          const grossQtySold = (r['source_sales.gross_qty_sold'] as number) ?? 0;
-          const grossQtyReturned = (r['source_sales.gross_qty_returned'] as number) ?? 0;
-          const returnRate = grossSales > 0 ? round2((grossReturns / grossSales) * 100) : 0;
-          return { brand, grossSales, grossReturns, grossQtySold, grossQtyReturned, returnRatePct: returnRate };
-        })
-        .filter(r => r.grossSales > 0 || r.grossReturns > 0)
-        .sort((a, b) => b.grossReturns - a.grossReturns);
-      const totalReturns = round2(data.reduce((s, r) => s + r.grossReturns, 0));
-      const totalSales = round2(data.reduce((s, r) => s + r.grossSales, 0));
-      return JSON.stringify({
-        year,
-        totalGrossReturns: totalReturns,
-        totalGrossSales: totalSales,
-        overallReturnRatePct: totalSales > 0 ? round2((totalReturns / totalSales) * 100) : 0,
-        byBrand: data,
-      });
-    }
-
-    case 'get_inventory': {
-      const section = (input['section'] as string) || 'all';
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#INVENTORY#CATALOG' } }));
-      const data = result.Item?.['data'] as Record<string, unknown> | undefined;
-      if (!data) return JSON.stringify({ error: 'Inventory not synced yet' });
-      const out: Record<string, unknown> = {};
-      if (section === 'summary' || section === 'all') out['summary'] = data['summary'];
-      if (section === 'low_stock' || section === 'all') out['lowStockItems'] = data['lowStockItems'];
-      if (section === 'top_margin' || section === 'all') out['topMarginItems'] = (data['topMarginItems'] as unknown[])?.slice(0, 20);
-      if (section === 'low_margin' || section === 'all') out['lowMarginItems'] = data['lowMarginItems'];
-      if (section === 'by_department' || section === 'all') out['byDepartment'] = data['byDepartment'];
-      out['cachedAt'] = result.Item?.['cachedAt'];
-      return JSON.stringify(out);
-    }
-
-    case 'get_staff_performance': {
-      const from = (input['from_date'] as string) || daysAgo(30);
-      const to = (input['to_date'] as string) || today;
-      const result = await docClient.send(new QueryCommand({
-        TableName: TABLE_NAME,
-        KeyConditionExpression: 'userId = :uid AND sk BETWEEN :from AND :to',
-        ExpressionAttributeValues: {
-          ':uid': OWNER_USER_ID,
-          ':from': `POS#DAILY#${from}`,
-          ':to': `POS#DAILY#${to}`,
-        },
-      }));
-      type Rollup = { bySalesRep?: Record<string, number> };
-      const repTotals: Record<string, { revenue: number; days: number }> = {};
-      for (const item of result.Items ?? []) {
-        const r = item['rollup'] as Rollup | undefined;
-        if (!r?.bySalesRep) continue;
-        for (const [rep, amt] of Object.entries(r.bySalesRep)) {
-          if (!repTotals[rep]) repTotals[rep] = { revenue: 0, days: 0 };
-          repTotals[rep]!.revenue += amt as number;
-          repTotals[rep]!.days += 1;
-        }
-      }
-      const staff = Object.entries(repTotals)
-        .map(([name, v]) => ({ name, revenue: round2(v.revenue), activeDays: v.days, avgPerDay: v.days > 0 ? round2(v.revenue / v.days) : 0 }))
-        .sort((a, b) => b.revenue - a.revenue);
-      return JSON.stringify({ from, to, staff });
-    }
-
-    case 'get_brand_performance': {
-      const year = (input['year'] as string) === 'current' || !input['year'] ? currentYear : input['year'] as string;
-      const topN = (input['top_n'] as number) || 20;
-      const sk = year === currentYear ? 'POS#REPORTING#SALES' : `POS#REPORTING#YEAR#${year}`;
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk } }));
-      const brandRows = (result.Item?.['brandRows'] as Array<Record<string, unknown>> | undefined) ?? [];
-      // Merge case-insensitive duplicates
-      const merged = new Map<string, { brand: string; netSales: number; netQty: number; transactions: number }>();
-      for (const r of brandRows) {
-        const raw = ((r['item.custom@brand'] as string | undefined) ?? '').trim();
-        const key = raw.toUpperCase() || '__NULL__';
-        let entry = merged.get(key);
-        if (!entry) { entry = { brand: raw || '(no brand)', netSales: 0, netQty: 0, transactions: 0 }; merged.set(key, entry); }
-        entry.netSales += (r['source_sales.net_sales'] as number) ?? 0;
-        entry.netQty += (r['source_sales.net_qty_sold'] as number) ?? 0;
-        entry.transactions += (r['source_sales.transaction_count'] as number) ?? 0;
-      }
-      const brands = Array.from(merged.values())
-        .map(b => ({ ...b, netSales: round2(b.netSales) }))
-        .sort((a, b) => b.netSales - a.netSales)
-        .slice(0, topN);
-      return JSON.stringify({ year, brands });
-    }
-
-    case 'get_purchasing': {
-      const section = (input['section'] as string) || 'all';
-      const [vendorsResult, ordersResult] = await Promise.all([
-        docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#VENDORS' } })),
-        docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#ORDERS' } })),
-      ]);
-      const out: Record<string, unknown> = {};
-      if (section === 'vendors' || section === 'all') out['vendors'] = vendorsResult.Item?.['vendors'];
-      if (section === 'vendor_rank' || section === 'all') out['vendorRank'] = vendorsResult.Item?.['vendorRank'];
-      if (section === 'open_orders' || section === 'all') {
-        out['openOrders'] = ordersResult.Item?.['orders'];
-        out['totalOrdersAllTime'] = ordersResult.Item?.['totalOrders'];
-      }
-      return JSON.stringify(out);
-    }
-
-    case 'get_customer_insights': {
-      const year = (input['year'] as string) === 'current' || !input['year'] ? currentYear : input['year'] as string;
-      const sk = year === currentYear ? 'POS#REPORTING#SALES' : `POS#REPORTING#YEAR#${year}`;
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk } }));
-      const customerRows = (result.Item?.['customerRows'] as Array<Record<string, unknown>> | undefined) ?? [];
-      const totalCustomers = customerRows.filter(r => r['customer.public_id']).length;
-      const repeatCustomers = customerRows.filter(r => ((r['source_sales.transaction_count'] as number) ?? 0) > 1).length;
-      const newCustomers = totalCustomers - repeatCustomers;
-      const repeatRevenue = round2(customerRows
-        .filter(r => ((r['source_sales.transaction_count'] as number) ?? 0) > 1)
-        .reduce((s, r) => s + ((r['source_sales.net_sales'] as number) ?? 0), 0));
-      return JSON.stringify({
-        year, totalCustomers, repeatCustomers, newCustomers,
-        repeatRate: totalCustomers > 0 ? round2((repeatCustomers / totalCustomers) * 100) : 0,
-        repeatRevenue,
-      });
-    }
-
-    case 'get_payment_methods': {
-      const from = (input['from_date'] as string) || daysAgo(30);
-      const to = (input['to_date'] as string) || today;
-      const [rollupsResult, ptResult] = await Promise.all([
-        docClient.send(new QueryCommand({
-          TableName: TABLE_NAME,
-          KeyConditionExpression: 'userId = :uid AND sk BETWEEN :from AND :to',
-          ExpressionAttributeValues: { ':uid': OWNER_USER_ID, ':from': `POS#DAILY#${from}`, ':to': `POS#DAILY#${to}` },
-        })),
-        docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PAYMENT_TYPES#LIST' } })),
-      ]);
-      const ptList = (ptResult.Item?.['types'] as Array<{ id: number; name: string }> | undefined) ?? [];
-      const ptMap: Record<string, string> = {};
-      for (const p of ptList) ptMap[String(p.id)] = p.name;
-      type Rollup = { byPaymentType?: Record<string, { count: number; amount: number }> };
-      const totals: Record<string, { count: number; amount: number }> = {};
-      for (const item of rollupsResult.Items ?? []) {
-        const r = item['rollup'] as Rollup | undefined;
-        if (!r?.byPaymentType) continue;
-        for (const [id, v] of Object.entries(r.byPaymentType)) {
-          if (!totals[id]) totals[id] = { count: 0, amount: 0 };
-          totals[id]!.count += v.count;
-          totals[id]!.amount += v.amount;
-        }
-      }
-      const methods = Object.entries(totals)
-        .map(([id, v]) => ({ name: ptMap[id] ?? `Type ${id}`, count: v.count, amount: round2(v.amount) }))
-        .sort((a, b) => b.amount - a.amount);
-      return JSON.stringify({ from, to, paymentMethods: methods });
-    }
-
-    case 'get_sync_status': {
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#SYNC#STATUS' } }));
-      return JSON.stringify(result.Item ?? { status: 'never synced' });
-    }
-
-    case 'get_hourly_heatmap': {
-      const from = (input['from_date'] as string) || daysAgo(30);
-      const to = (input['to_date'] as string) || today;
-      const dayFilter = (input['day_of_week'] as string | undefined)?.toLowerCase();
-      const DAY_NAMES = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-      const result = await docClient.send(new QueryCommand({
-        TableName: TABLE_NAME,
-        KeyConditionExpression: 'userId = :uid AND sk BETWEEN :from AND :to',
-        ExpressionAttributeValues: { ':uid': OWNER_USER_ID, ':from': `POS#DAILY#${from}`, ':to': `POS#DAILY#${to}` },
-      }));
-      type Rollup = { date: string; byHour?: Record<string, number> };
-      const hourTotals: Record<string, { revenue: number; days: number }> = {};
-      let daysIncluded = 0;
-      for (const item of result.Items ?? []) {
-        const r = item['rollup'] as Rollup | undefined;
-        if (!r?.byHour) continue;
-        // Apply day-of-week filter if requested
-        if (dayFilter) {
-          const d = new Date(r.date + 'T12:00:00');
-          const dayName = DAY_NAMES[d.getDay()];
-          if (dayName !== dayFilter) continue;
-        }
-        daysIncluded++;
-        for (const [hour, amt] of Object.entries(r.byHour)) {
-          if (!hourTotals[hour]) hourTotals[hour] = { revenue: 0, days: 0 };
-          hourTotals[hour]!.revenue += amt as number;
-          hourTotals[hour]!.days += 1;
-        }
-      }
-      const hours = Array.from({ length: 24 }, (_, h) => {
-        const key = String(h).padStart(2, '0');
-        const t = hourTotals[key] ?? { revenue: 0, days: 0 };
-        const label = h === 0 ? '12am' : h < 12 ? `${h}am` : h === 12 ? '12pm' : `${h - 12}pm`;
-        return {
-          hour: h, label,
-          totalRevenue: round2(t.revenue),
-          avgRevenue: t.days > 0 ? round2(t.revenue / t.days) : 0,
-          daysActive: t.days,
-        };
-      }).filter(h => h.totalRevenue > 0);
-      const peak = hours.reduce((best, h) => h.avgRevenue > best.avgRevenue ? h : best, hours[0] ?? { label: 'none', avgRevenue: 0 });
-      return JSON.stringify({
-        from, to,
-        dayFilter: dayFilter ?? 'all days',
-        daysIncluded,
-        peakHour: peak,
-        byHour: hours,
-      });
-    }
-
-    case 'get_top_customers': {
-      const from = (input['from_date'] as string) || daysAgo(30);
-      const to = (input['to_date'] as string) || today;
-      const topN = Math.min(Number(input['top_n']) || 15, 50);
-      const result = await docClient.send(new QueryCommand({
-        TableName: TABLE_NAME,
-        KeyConditionExpression: 'userId = :uid AND sk BETWEEN :from AND :to',
-        ExpressionAttributeValues: { ':uid': OWNER_USER_ID, ':from': `POS#DAILY#${from}`, ':to': `POS#DAILY#${to}` },
-      }));
-      type Rollup = { topCustomers?: Record<string, number> };
-      const customerTotals: Record<string, { revenue: number; visits: number }> = {};
-      for (const item of result.Items ?? []) {
-        const r = item['rollup'] as Rollup | undefined;
-        if (!r?.topCustomers) continue;
-        for (const [name, amt] of Object.entries(r.topCustomers)) {
-          if (!name || name === 'null') continue;
-          if (!customerTotals[name]) customerTotals[name] = { revenue: 0, visits: 0 };
-          customerTotals[name]!.revenue += amt as number;
-          customerTotals[name]!.visits += 1;
-        }
-      }
-      const customers = Object.entries(customerTotals)
-        .map(([name, v]) => ({ name, revenue: round2(v.revenue), visits: v.visits, avgPerVisit: v.visits > 0 ? round2(v.revenue / v.visits) : 0 }))
-        .sort((a, b) => b.revenue - a.revenue)
-        .slice(0, topN);
-      const totalRevenue = round2(customers.reduce((s, c) => s + c.revenue, 0));
-      return JSON.stringify({ from, to, topCustomers: customers, totalRevenueFromNamed: totalRevenue });
-    }
-
-    case 'get_open_orders_detail': {
-      const vendorFilter = ((input['vendor_name'] as string) ?? '').toLowerCase().trim();
-      const minDays = Number(input['min_days_open']) || 0;
-      const [ordersResult, vendorsResult] = await Promise.all([
-        docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#ORDERS' } })),
-        docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#PURCHASING#VENDORS' } })),
-      ]);
-      type Order = { id: number; public_id?: string; status?: string; vendor_id?: number; vendorName?: string; total_qty?: number; total_cost?: number; total_open_qty?: number; created_at?: string };
-      const orders = (ordersResult.Item?.['orders'] as Order[] | undefined) ?? [];
-      const vendorRank = (vendorsResult.Item?.['vendorRank'] as Array<{ vendorId: number; vendorName: string }> | undefined) ?? [];
-      const vendorNameMap: Record<number, string> = {};
-      for (const v of vendorRank) vendorNameMap[v.vendorId] = v.vendorName;
-      const now = Date.now();
-      const enriched = orders
-        .map(o => {
-          const name = o.vendorName ?? vendorNameMap[o.vendor_id ?? -1] ?? `Vendor ${o.vendor_id}`;
-          const created = o.created_at ? new Date(o.created_at) : null;
-          const daysOpen = created ? Math.floor((now - created.getTime()) / 86400000) : null;
-          return {
-            poNumber: o.public_id ?? String(o.id),
-            vendorName: name,
-            status: o.status ?? 'unknown',
-            createdAt: o.created_at ?? null,
-            daysOpen,
-            qtyOrdered: o.total_qty ?? 0,
-            qtyOpen: o.total_open_qty ?? 0,
-            qtyReceived: (o.total_qty ?? 0) - (o.total_open_qty ?? 0),
-            totalCost: round2(o.total_cost ?? 0),
-            aging: daysOpen === null ? 'unknown' : daysOpen <= 7 ? 'fresh' : daysOpen <= 30 ? 'normal' : daysOpen <= 60 ? 'aging' : 'overdue',
-          };
-        })
-        .filter(o => !vendorFilter || o.vendorName.toLowerCase().includes(vendorFilter))
-        .filter(o => minDays === 0 || (o.daysOpen !== null && o.daysOpen >= minDays))
-        .sort((a, b) => (b.daysOpen ?? 0) - (a.daysOpen ?? 0));
-      // Vendor-level summary
-      const byVendor: Record<string, { orders: number; totalCost: number; totalOpenQty: number; oldestDays: number }> = {};
-      for (const o of enriched) {
-        if (!byVendor[o.vendorName]) byVendor[o.vendorName] = { orders: 0, totalCost: 0, totalOpenQty: 0, oldestDays: 0 };
-        byVendor[o.vendorName]!.orders += 1;
-        byVendor[o.vendorName]!.totalCost += o.totalCost;
-        byVendor[o.vendorName]!.totalOpenQty += o.qtyOpen;
-        byVendor[o.vendorName]!.oldestDays = Math.max(byVendor[o.vendorName]!.oldestDays, o.daysOpen ?? 0);
-      }
-      const vendorSummary = Object.entries(byVendor)
-        .map(([name, v]) => ({ vendorName: name, openOrders: v.orders, totalCommittedCost: round2(v.totalCost), totalOpenUnits: v.totalOpenQty, oldestOrderDays: v.oldestDays }))
-        .sort((a, b) => b.totalCommittedCost - a.totalCommittedCost);
-      return JSON.stringify({
-        filter: vendorFilter || 'all vendors',
-        minDaysOpen: minDays,
-        totalOpenOrders: enriched.length,
-        totalCommittedCost: round2(enriched.reduce((s, o) => s + o.totalCost, 0)),
-        vendorSummary,
-        orders: enriched,
-      });
-    }
-
-    case 'get_historical_comparison': {
-      const currentYearNum = parseInt(currentYear, 10);
-      const requestedYears = (input['years'] as string[] | undefined) ?? [String(currentYearNum - 1), currentYear];
-      // Cap at 4 years to avoid huge payloads
-      const yearsToFetch = requestedYears.slice(0, 4);
-      const results = await Promise.all(
-        yearsToFetch.map(async yr => {
-          const sk = yr === currentYear ? 'POS#REPORTING#SALES' : `POS#REPORTING#YEAR#${yr}`;
-          const r = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk } }));
-          if (!r.Item) return { year: yr, available: false };
-          const brandRows = (r.Item['brandRows'] as Array<Record<string, unknown>> | undefined) ?? [];
-          const totalsRows = (r.Item['totalsRows'] as Array<Record<string, unknown>> | undefined) ?? [];
-          const netSales = totalsRows.length > 0
-            ? round2(totalsRows.reduce((s, t) => s + ((t['source_sales.net_sales'] as number) ?? 0), 0))
-            : round2(brandRows.reduce((s, b) => s + ((b['source_sales.net_sales'] as number) ?? 0), 0));
-          const transactions = totalsRows.length > 0
-            ? totalsRows.reduce((s, t) => s + ((t['source_sales.transaction_count'] as number) ?? 0), 0)
-            : brandRows.reduce((s, b) => s + ((b['source_sales.transaction_count'] as number) ?? 0), 0);
-          // Top 5 brands for context
-          const merged = new Map<string, number>();
-          for (const b of brandRows) {
-            const brand = ((b['item.custom@brand'] as string | undefined) ?? '').trim().toUpperCase() || '__NULL__';
-            merged.set(brand, (merged.get(brand) ?? 0) + ((b['source_sales.net_sales'] as number) ?? 0));
-          }
-          const topBrands = Array.from(merged.entries())
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([brand, sales]) => ({ brand, netSales: round2(sales) }));
-          return {
-            year: yr,
-            available: true,
-            netSales,
-            transactions,
-            avgTicket: transactions > 0 ? round2(netSales / transactions) : 0,
-            fromDate: r.Item['fromDate'] ?? `${yr}-01-01`,
-            toDate: r.Item['toDate'] ?? `${yr}-12-31`,
-            topBrands,
-            cachedAt: r.Item['cachedAt'],
-          };
-        })
-      );
-      // Compute YoY change between consecutive years
-      const comparisons: Array<{ from: string; to: string; salesChangePct: number; salesChangeDollar: number }> = [];
-      for (let i = 0; i < results.length - 1; i++) {
-        const a = results[i]!, b = results[i + 1]!;
-        if (a.available && b.available && typeof a.netSales === 'number' && typeof b.netSales === 'number') {
-          const diff = b.netSales - a.netSales;
-          comparisons.push({
-            from: a.year, to: b.year,
-            salesChangeDollar: round2(diff),
-            salesChangePct: a.netSales > 0 ? round2((diff / a.netSales) * 100) : 0,
-          });
-        }
-      }
-      return JSON.stringify({ years: results, yearOverYearChanges: comparisons });
-    }
-
-    case 'get_orthotics_commission': {
-      const period = (input['period'] as string) || 'ytd';
-      const result = await docClient.send(new GetCommand({ TableName: TABLE_NAME, Key: { userId: OWNER_USER_ID, sk: 'POS#REPORTING#ORTHOTICS' } }));
-      if (!result.Item) return JSON.stringify({ error: 'Orthotics data not synced yet. Click Sync Now on the Staff tab.' });
-      type ORow = Record<string, unknown>;
-      const rows = (result.Item['orthoticsRepRows'] as ORow[] | undefined) ?? [];
-      const ORTHOTICS_PATTERN = /orthotic/i;
-      const TIER1_MAX = 10, TIER1_RATE = 10, TIER2_RATE = 15;
-      const repUnits: Record<string, number> = {};
-      const hasDept = rows.some(r => r['item.department'] != null);
-      for (const r of rows) {
-        if (hasDept && !ORTHOTICS_PATTERN.test(String(r['item.department'] ?? ''))) continue;
-        const rep = String(r['user.name'] ?? r['sales_rep'] ?? 'Unassigned').trim() || 'Unassigned';
-        const qty = (r['source_sales.net_qty_sold'] as number) ?? 0;
-        if (qty > 0) repUnits[rep] = (repUnits[rep] ?? 0) + qty;
-      }
-      const reps = Object.entries(repUnits).map(([name, units]) => {
-        const tier1 = Math.min(units, TIER1_MAX);
-        const tier2 = Math.max(0, units - TIER1_MAX);
-        const commission = tier1 * TIER1_RATE + tier2 * TIER2_RATE;
-        return { name, units, tier1Units: tier1, tier2Units: tier2, commissionOwed: commission };
-      }).sort((a, b) => b.units - a.units);
-      const totalCommission = reps.reduce((s, r) => s + r.commissionOwed, 0);
-      const depts = [...new Set(rows.filter(r => ORTHOTICS_PATTERN.test(String(r['item.department'] ?? ''))).map(r => String(r['item.department'] ?? '')))];
-      return JSON.stringify({
-        period,
-        commissionRules: `$${TIER1_RATE}/unit for units 1-${TIER1_MAX}, $${TIER2_RATE}/unit for unit ${TIER1_MAX + 1}+`,
-        orthoticsDepartments: depts,
-        departmentFilterApplied: hasDept,
-        reps,
-        totalCommissionOwed: totalCommission,
-        cachedAt: result.Item['cachedAt'],
-      });
-    }
-
-    case 'get_tax_summary': {
-      // Tax sessions are stored under the authenticated user's own sub, not OWNER_USER_ID
-      const taxUserId = callerUserId ?? OWNER_USER_ID;
-      const taxYearFilter = input['tax_year'] as string | undefined;
-      // Query all tax sessions for this user, sorted by most recent
-      const result = await docClient.send(new QueryCommand({
-        TableName: TABLE_NAME,
-        KeyConditionExpression: 'userId = :uid AND begins_with(sk, :prefix)',
-        ExpressionAttributeValues: { ':uid': taxUserId, ':prefix': 'TAX#' },
-        ScanIndexForward: false, // newest first
-        Limit: 10,
-      }));
-      const sessions = (result.Items ?? []).filter(item => {
-        if (!taxYearFilter) return true;
-        return String(item['taxYear'] ?? '') === taxYearFilter;
-      });
-      if (sessions.length === 0) {
-        return JSON.stringify({ error: taxYearFilter ? `No tax session found for ${taxYearFilter}` : 'No tax sessions found. Run a tax analysis first.' });
-      }
-      const latest = sessions[0]!;
-      const inputData = latest['inputData'] as Record<string, unknown> | undefined;
-      const result2 = latest['result'] as Record<string, unknown> | undefined;
-      return JSON.stringify({
-        sessionId: latest['sessionId'],
-        taxYear: latest['taxYear'],
-        entityType: latest['entityType'],
-        createdAt: latest['createdAt'],
-        status: latest['status'],
-        formInputs: inputData ? {
-          totalRevenue: inputData['totalRevenue'],
-          cogs: inputData['cogs'],
-          totalOperatingExpenses: inputData['totalOperatingExpenses'],
-          rentLeasePayments: inputData['rentLeasePayments'],
-          totalEmployeeWages: inputData['totalEmployeeWages'],
-          royaltyFees: inputData['royaltyFees'],
-          adFundContributions: inputData['adFundContributions'],
-          businessInsurancePremiums: inputData['businessInsurancePremiums'],
-          loanInterestPaid: inputData['loanInterestPaid'],
-          salesTaxCollected: inputData['salesTaxCollected'],
-          ownerHealthInsurancePremiums: inputData['ownerHealthInsurancePremiums'],
-          hasEmployees: inputData['hasEmployees'],
-          employeeCount: inputData['employeeCount'],
-          isFranchise: inputData['isFranchise'],
-        } : null,
-        estimates: result2 ? {
-          estimatedFederalTaxableIncome: result2['estimatedFederalTaxableIncome'],
-          estimatedFederalTaxLiability: result2['estimatedFederalTaxLiability'],
-          estimatedSelfEmploymentTax: result2['estimatedSelfEmploymentTax'],
-          estimatedTexasFranchiseTax: result2['estimatedTexasFranchiseTax'],
-          qbiDeduction: result2['qbiDeduction'],
-          estimatedQuarterlyPayments: result2['estimatedQuarterlyPayments'],
-          keyDeductions: result2['keyDeductions'],
-          flaggedForCPAReview: result2['flaggedForCPAReview'],
-          formsToFile: result2['formsToFile'],
-          ownerSummary: result2['ownerSummary'],
-        } : null,
-      });
-    }
-
-    case 'cache_query': {
-      try {
-        const result = await cacheQuery(input as CachedQueryArgs);
-        return JSON.stringify(result);
-      } catch (err) {
-        return JSON.stringify({ error: `cache_query failed: ${(err as Error).message}` });
-      }
-    }
-
-    case 'cache_vendor_activity': {
-      const vendor = String(input['vendor'] ?? '');
-      if (!vendor) return JSON.stringify({ error: 'vendor is required' });
-      const days = Math.min(Number(input['days']) || 90, 365);
-      try {
-        return JSON.stringify(await cacheVendorActivity(vendor, days));
-      } catch (err) {
-        return JSON.stringify({ error: `cache_vendor_activity failed: ${(err as Error).message}` });
-      }
-    }
-
-    case 'cache_read': {
-      const id = String(input['id'] ?? '');
-      if (!id) return JSON.stringify({ error: 'id is required' });
-      const dateOnly = String(input['dateOnly'] ?? '') || undefined;
-      try {
-        const m = await cacheRead(id, dateOnly);
-        return JSON.stringify(m ?? { error: `Message ${id} not in cache` });
-      } catch (err) {
-        return JSON.stringify({ error: `cache_read failed: ${(err as Error).message}` });
-      }
-    }
-
+    case 'call_inbox_assistant':       return salesTools.callInboxAssistant(args);
+    case 'get_vendor_contacts':        return salesTools.getVendorContacts(args);
+    case 'get_sales_summary':          return salesTools.getSalesSummary(args, ctx);
+    case 'get_returns_data':           return salesTools.getReturnsData(args, ctx);
+    case 'get_inventory':              return salesTools.getInventory(args, ctx);
+    case 'get_staff_performance':      return salesTools.getStaffPerformance(args, ctx);
+    case 'get_brand_performance':      return salesTools.getBrandPerformance(args, ctx);
+    case 'get_purchasing':             return salesTools.getPurchasing(args, ctx);
+    case 'get_customer_insights':      return salesTools.getCustomerInsights(args, ctx);
+    case 'get_payment_methods':        return salesTools.getPaymentMethods(args, ctx);
+    case 'get_sync_status':            return salesTools.getSyncStatus(args, ctx);
+    case 'get_hourly_heatmap':         return salesTools.getHourlyHeatmap(args, ctx);
+    case 'get_top_customers':          return salesTools.getTopCustomers(args, ctx);
+    case 'get_open_orders_detail':     return salesTools.getOpenOrdersDetail(args, ctx);
+    case 'get_historical_comparison':  return salesTools.getHistoricalComparison(args, ctx);
+    case 'get_orthotics_commission':   return salesTools.getOrthoticsCommission(args, ctx);
+    case 'get_tax_summary':            return salesTools.getTaxSummary(args, ctx);
+    case 'cache_query':                return salesTools.cacheQuery(args);
+    case 'cache_vendor_activity':      return salesTools.cacheVendorActivity(args);
+    case 'cache_read':                 return salesTools.cacheRead(args, ctx);
     default:
       return JSON.stringify({ error: `Unknown tool: ${name}` });
   }
@@ -1064,6 +475,15 @@ Tool selection guide:
 - Payment methods (cash/card split) → get_payment_methods
 - Tax form inputs / estimated liability → get_tax_summary
 - Last sync time → get_sync_status
+- Vendor contact info / account numbers → get_vendor_contacts
+- Email / inbox questions (invoices, vendor emails, customer threads) → call_inbox_assistant
+
+Cross-agent calling (IMPORTANT):
+- When a question requires email or inbox context that POS data cannot answer, use call_inbox_assistant.
+- ALWAYS tell the user first: "Let me check the inbox for that…" before calling the tool.
+- The tool queries the Gmail cache directly and returns raw results — synthesize them into a clear answer.
+- Examples: "did Brooks email us?", "any pending invoices?", "last email from Nancy?", "what did the vendor say about the price change?"
+- Do NOT use call_inbox_assistant for purely numeric POS questions — use the POS tools instead.
 
 Vendor contact info (IMPORTANT — follow this order):
 1. ALWAYS call get_vendor_contacts FIRST for any question about vendor phone, email, rep name, account number, or website.
@@ -1077,7 +497,211 @@ Inbox-aware reasoning (use when a question would benefit from email context):
 - When a question is about a specific vendor or brand, prefer cache_vendor_activity(vendor, days) — gives last contact date, top senders, top subjects, recent message ids in one shot.
 - For broader inbox digs use cache_query({ vendor, kind, since, until, from, text }). kind = invoice | vendor | customer | internal.
 - Do NOT use Gmail tools for purely numeric POS questions (today's sales, top brands, etc.) — that's noise.
-- Do NOT quote email bodies verbatim. Paraphrase, and cite the message id like "(msg 18a3f...)" so the owner can find the thread`.trim();
+- Do NOT quote email bodies verbatim. Paraphrase, and cite the message id like "(msg 18a3f...)" — the app renders these as clickable Gmail links automatically. Do NOT write out full https://mail.google.com URLs.`.trim();
+}
+
+// ── Chat history handlers ─────────────────────────────────────────────
+//
+// Conversations are stored per-user in DynamoDB with a 30-day TTL.
+// SK format: CHAT_HISTORY#<type>#<sessionId>
+// type = 'sales' | 'inbox'
+
+const HISTORY_TTL_DAYS = 30;
+
+interface HistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string; // ISO 8601
+}
+
+interface HistorySession {
+  sessionId: string;
+  type: 'sales' | 'inbox' | 'assistant';
+  preview: string;       // first user message, truncated
+  messages: HistoryMessage[];
+  startedAt: string;
+  lastMessageAt: string;
+  ttl: number;           // epoch seconds
+}
+
+function historyTtl(): number {
+  return Math.floor(Date.now() / 1000) + HISTORY_TTL_DAYS * 86400;
+}
+
+async function handleListHistory(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  userId: string | undefined
+): Promise<APIGatewayProxyResultV2> {
+  if (!userId) return json(401, { error: 'Unauthorized' });
+  const type = event.queryStringParameters?.['type'] ?? 'sales';
+
+  // ── ?type=all unified-list mode (Task 13.2) ─────────────────────
+  // Queries CHAT_HISTORY#sales#*, CHAT_HISTORY#inbox#*, and
+  // CHAT_HISTORY#assistant#*, caps each prefix at 50, and tags
+  // legacy sessions with `legacy: true` + a `displayLabel` so the
+  // unified `<FsAssistant />` history list can show
+  //   "Sales (legacy)", "Inbox (legacy)", "FS Assistant"
+  // (per design.md §Component 5 chat history endpoints / Req 10.4).
+  if (type === 'all') {
+    const PREFIXES: Array<{
+      type: HistorySession['type'];
+      legacy: boolean;
+      displayLabel: string;
+    }> = [
+      { type: 'assistant', legacy: false, displayLabel: 'FS Assistant' },
+      { type: 'sales', legacy: true, displayLabel: 'Sales (legacy)' },
+      { type: 'inbox', legacy: true, displayLabel: 'Inbox (legacy)' },
+    ];
+    try {
+      const groups = await Promise.all(
+        PREFIXES.map(async ({ type: t, legacy, displayLabel }) => {
+          const result = await docClient.send(new QueryCommand({
+            TableName: TABLE_NAME,
+            KeyConditionExpression: 'userId = :uid AND begins_with(sk, :prefix)',
+            ExpressionAttributeValues: {
+              ':uid': userId,
+              ':prefix': `CHAT_HISTORY#${t}#`,
+            },
+            ProjectionExpression: 'sessionId, #t, preview, startedAt, lastMessageAt',
+            ExpressionAttributeNames: { '#t': 'type' },
+            ScanIndexForward: false,
+            Limit: 50,
+          }));
+          return (result.Items ?? []).map((item) => ({
+            sessionId: item['sessionId'],
+            type: item['type'],
+            preview: item['preview'],
+            startedAt: item['startedAt'],
+            lastMessageAt: item['lastMessageAt'],
+            legacy,
+            displayLabel,
+          }));
+        })
+      );
+      // Merge and sort by lastMessageAt descending so the user sees the
+      // most recently active session first regardless of type.
+      const sessions = groups
+        .flat()
+        .sort((a, b) =>
+          String(b.lastMessageAt ?? '').localeCompare(String(a.lastMessageAt ?? ''))
+        );
+      return json(200, { sessions });
+    } catch (err) {
+      console.error('handleListHistory[all] error:', (err as Error).message);
+      return json(500, { error: 'Failed to list history' });
+    }
+  }
+
+  // ── Single-type list (sales | inbox | assistant) ────────────────
+  const skPrefix = `CHAT_HISTORY#${type}#`;
+  try {
+    const result = await docClient.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'userId = :uid AND begins_with(sk, :prefix)',
+      ExpressionAttributeValues: { ':uid': userId, ':prefix': skPrefix },
+      // Return metadata only — no full messages list
+      ProjectionExpression: 'sessionId, #t, preview, startedAt, lastMessageAt',
+      ExpressionAttributeNames: { '#t': 'type' },
+      ScanIndexForward: false, // newest first
+      Limit: 50,
+    }));
+    const sessions = (result.Items ?? []).map((item) => ({
+      sessionId: item['sessionId'],
+      type: item['type'],
+      preview: item['preview'],
+      startedAt: item['startedAt'],
+      lastMessageAt: item['lastMessageAt'],
+    }));
+    return json(200, { sessions });
+  } catch (err) {
+    console.error('handleListHistory error:', (err as Error).message);
+    return json(500, { error: 'Failed to list history' });
+  }
+}
+
+async function handleGetHistory(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  userId: string | undefined
+): Promise<APIGatewayProxyResultV2> {
+  if (!userId) return json(401, { error: 'Unauthorized' });
+  const sessionId = event.pathParameters?.['sessionId'];
+  if (!sessionId) return json(400, { error: 'sessionId is required' });
+  const type = event.queryStringParameters?.['type'] ?? 'sales';
+  const sk = `CHAT_HISTORY#${type}#${sessionId}`;
+  try {
+    const result = await docClient.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { userId, sk },
+    }));
+    if (!result.Item) return json(404, { error: 'Session not found' });
+    return json(200, { session: result.Item });
+  } catch (err) {
+    console.error('handleGetHistory error:', (err as Error).message);
+    return json(500, { error: 'Failed to get history' });
+  }
+}
+
+async function handleSaveHistory(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  userId: string | undefined
+): Promise<APIGatewayProxyResultV2> {
+  if (!userId) return json(401, { error: 'Unauthorized' });
+  if (!event.body) return json(400, { error: 'Body required' });
+  let body: Partial<HistorySession>;
+  try { body = JSON.parse(event.body) as Partial<HistorySession>; }
+  catch { return json(400, { error: 'Invalid JSON' }); }
+
+  const { sessionId, type, messages } = body;
+  if (!sessionId || !type || !messages?.length) {
+    return json(400, { error: 'sessionId, type, and messages are required' });
+  }
+  if (type !== 'sales' && type !== 'inbox' && type !== 'assistant') {
+    return json(400, { error: 'type must be sales, inbox, or assistant' });
+  }
+
+  const now = new Date().toISOString();
+  const firstUserMsg = messages.find((m) => m.role === 'user');
+  const preview = firstUserMsg
+    ? firstUserMsg.content.slice(0, 120) + (firstUserMsg.content.length > 120 ? '…' : '')
+    : '(no messages)';
+
+  const session: HistorySession & { userId: string; sk: string } = {
+    userId,
+    sk: `CHAT_HISTORY#${type}#${sessionId}`,
+    sessionId,
+    type,
+    preview,
+    messages,
+    startedAt: body.startedAt ?? now,
+    lastMessageAt: now,
+    ttl: historyTtl(),
+  };
+
+  try {
+    await docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: session }));
+    return json(200, { saved: true, sessionId });
+  } catch (err) {
+    console.error('handleSaveHistory error:', (err as Error).message);
+    return json(500, { error: 'Failed to save history' });
+  }
+}
+
+async function handleDeleteHistory(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  userId: string | undefined
+): Promise<APIGatewayProxyResultV2> {
+  if (!userId) return json(401, { error: 'Unauthorized' });
+  const sessionId = event.pathParameters?.['sessionId'];
+  if (!sessionId) return json(400, { error: 'sessionId is required' });
+  const type = event.queryStringParameters?.['type'] ?? 'sales';
+  const sk = `CHAT_HISTORY#${type}#${sessionId}`;
+  try {
+    await docClient.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { userId, sk } }));
+    return json(200, { deleted: true });
+  } catch (err) {
+    console.error('handleDeleteHistory error:', (err as Error).message);
+    return json(500, { error: 'Failed to delete history' });
+  }
 }
 
 // ── Main handler ─────────────────────────────────────────────────────
@@ -1086,6 +710,23 @@ export const handler = async (
   event: APIGatewayProxyEventV2WithJWTAuthorizer
 ): Promise<APIGatewayProxyResultV2> => {
   const callerUserId = event.requestContext.authorizer.jwt.claims['sub'] as string | undefined;
+  const route = event.routeKey;
+
+  // ── History routes ────────────────────────────────────────────────
+  if (route === 'GET /chat/history') {
+    return handleListHistory(event, callerUserId);
+  }
+  if (route === 'GET /chat/history/{sessionId}') {
+    return handleGetHistory(event, callerUserId);
+  }
+  if (route === 'POST /chat/history') {
+    return handleSaveHistory(event, callerUserId);
+  }
+  if (route === 'DELETE /chat/history/{sessionId}') {
+    return handleDeleteHistory(event, callerUserId);
+  }
+
+  // ── Chat route ────────────────────────────────────────────────────
   let body: { messages?: Array<{ role: string; content: string }> };
   try {
     body = JSON.parse(event.body ?? '{}') as typeof body;
@@ -1110,6 +751,13 @@ export const handler = async (
   // Max 5 tool call rounds to prevent runaway loops
   const MAX_ROUNDS = 5;
   let round = 0;
+  // Collect attachment metadata from cache_read calls so the frontend
+  // can render download chips alongside the assistant reply.
+  const referencedAttachments: Array<{
+    messageId: string;
+    subject?: string;
+    attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }>;
+  }> = [];
 
   try {
     while (round < MAX_ROUNDS) {
@@ -1133,7 +781,11 @@ export const handler = async (
       if (stopReason === 'end_turn' || stopReason === 'max_tokens') {
         const textBlock = assistantContent.find(b => 'text' in b);
         const reply = textBlock && 'text' in textBlock ? textBlock.text : 'Sorry, I could not generate a response.';
-        return json(200, { reply });
+        return json(200, {
+          reply,
+          // Include any attachment metadata collected during tool calls
+          attachments: referencedAttachments.length > 0 ? referencedAttachments : undefined,
+        });
       }
 
       // If model wants to use tools, execute them all and send results back
@@ -1149,7 +801,7 @@ export const handler = async (
             const { toolUseId, name, input } = block.toolUse;
             console.log(`Tool call: ${name}`, JSON.stringify(input));
             try {
-              const result = await executeTool(name ?? '', (input ?? {}) as Record<string, unknown>, callerUserId);
+              const result = await executeTool(name ?? '', (input ?? {}) as Record<string, unknown>, callerUserId, referencedAttachments);
               console.log(`Tool result: ${name} → ${result.slice(0, 200)}`);
               return {
                 toolResult: {

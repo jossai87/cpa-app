@@ -26,6 +26,12 @@ const CUSTOM_DOMAIN_ALT = `www.${CUSTOM_DOMAIN}`;
 const HOSTED_ZONE_ID = 'Z0341623D3YSWQ21OYVP';
 const ACM_CERT_ARN = 'arn:aws:acm:us-east-1:558985210319:certificate/619356b6-ac75-494b-8f9a-6ba46e2386be';
 
+// Owner / admin email — single source of truth, propagated to every Lambda
+// that needs to gate admin-only behavior (chat, heartland, gmail-analysis,
+// and any future assistant edge functions). The SPA reads the same value
+// from `VITE_ADMIN_EMAIL` (see `src/lib/admin.ts`).
+const ADMIN_EMAIL = 'jandoossai@gmail.com';
+
 export class FootSolutionsStack extends Stack {
   constructor(scope: Construct, id: string, props?: StackProps) {
     super(scope, id, props);
@@ -245,6 +251,12 @@ export class FootSolutionsStack extends Stack {
           // Auto-delete uploaded documents after 90 days
           expiration: Duration.days(90),
         },
+        {
+          // Auto-delete CPA package zips after 7 days — they have short TTLs
+          // and contain sensitive financial data; no reason to keep them longer.
+          prefix: 'cpa-packages/',
+          expiration: Duration.days(7),
+        },
       ],
       cors: [
         {
@@ -273,11 +285,21 @@ export class FootSolutionsStack extends Stack {
       handler: 'handler',
       projectRoot: '../lambda',
       depsLockFilePath: '../lambda/package-lock.json',
-      timeout: Duration.seconds(30),
+      // Synchronous /tax/calculate returns in <1s after writing a pending
+      // row + scheduling the async self-invoke. The async background runs
+      // can take 30-180s, so the function timeout needs to cover that.
+      timeout: Duration.minutes(5),
       memorySize: 256,
       environment: {
         TABLE_NAME: table.tableName,
-        BEDROCK_MODEL_ID: 'us.amazon.nova-2-lite-v1:0',
+        // Claude Sonnet 4.6 with 1M context window beta — strong reasoning,
+        // fast, and headroom for multi-year tax history. Falls through to
+        // the IAM ARNs below for cross-region inference.
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        DOCS_BUCKET: docsBucket.bucketName,
+        FROM_ADDRESS: 'notifications@fsmanagementsystem.com',
+        // Owner's personal email — receives the zip password after every send
+        OWNER_NOTIFY_EMAIL: 'dreamthatbuild@gmail.com',
       },
       bundling: {
         minify: true,
@@ -293,19 +315,61 @@ export class FootSolutionsStack extends Stack {
     table.grantReadWriteData(taxFn);
 
     // Grant Bedrock InvokeModel on:
-    //  1. The US cross-region inference profile (what the Lambda calls)
-    //  2. All underlying foundation model ARNs the profile may route to
+    //  1. The cross-region inference profiles (what the Lambda calls)
+    //  2. All underlying foundation model ARNs the profiles may route to
     //     (cross-region inference fans out to the model in any US region)
+    // Primary: Claude Opus 4.7. Fallbacks kept in policy for resilience.
     taxFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvokeModel',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
         resources: [
+          // Claude Opus 4.7 (primary)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7',
+
+          // Claude Sonnet 4.6 (fallback)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
+
+          // Nova 2 Lite (legacy fallback)
           'arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-2-lite-v1:0',
           'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-2-lite-v1:0',
           'arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-2-lite-v1:0',
           'arn:aws:bedrock:us-west-2::foundation-model/amazon.nova-2-lite-v1:0',
+        ],
+      })
+    );
+
+    // Allow the Tax Lambda to self-invoke (async background analyze runs
+    // that bypass the 29s API Gateway integration timeout). Wildcard ARN
+    // avoids the circular CloudFormation dependency that grantInvoke()
+    // creates when a function references itself.
+    taxFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TaxSelfInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:us-east-1:${this.account}:function:foot-solutions-tax-handler`,
+        ],
+      })
+    );
+
+    // S3 read/write on the docs bucket for CPA package zip upload + presign
+    docsBucket.grantReadWrite(taxFn);
+
+    // SES SendEmail for the CPA link email + owner password email
+    taxFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'TaxSesSend',
+        effect: iam.Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          `arn:aws:ses:us-east-1:${this.account}:identity/fsmanagementsystem.com`,
         ],
       })
     );
@@ -353,6 +417,42 @@ export class FootSolutionsStack extends Stack {
         effect: iam.Effect.ALLOW,
         actions: ['secretsmanager:ListSecrets'],
         resources: ['*'],
+      })
+    );
+
+    // ── 8b. integrationsHandler Lambda ──────────────────────────────
+    const integrationsFn = new nodejs.NodejsFunction(this, 'IntegrationsHandler', {
+      functionName: 'foot-solutions-integrations-handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: '../lambda/integrations/index.ts',
+      handler: 'handler',
+      projectRoot: '../lambda',
+      depsLockFilePath: '../lambda/package-lock.json',
+      timeout: Duration.seconds(15),
+      memorySize: 128,
+      environment: {
+        // No extra env needed — secret IDs are hardcoded in the lambda
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        externalModules: ['@aws-sdk/*'],
+      },
+      description: 'Read and update API integration secrets (Heartland, Gmail)',
+    });
+    Tags.of(integrationsFn).add('Component', 'integrations');
+
+    // Grant Secrets Manager GetSecretValue + PutSecretValue on integration paths
+    integrationsFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'IntegrationsSecretsAccess',
+        effect: iam.Effect.ALLOW,
+        actions: ['secretsmanager:GetSecretValue', 'secretsmanager:PutSecretValue'],
+        resources: [
+          'arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/heartland/*',
+          'arn:aws:secretsmanager:us-east-1:*:secret:foot-solutions/gmail/*',
+        ],
       })
     );
 
@@ -425,6 +525,7 @@ export class FootSolutionsStack extends Stack {
         TABLE_NAME: table.tableName,
         OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
         SYNC_FUNCTION_NAME: 'foot-solutions-pos-sync',
+        ADMIN_EMAIL,
         PARAMETERS_SECRETS_EXTENSION_CACHE_ENABLED: 'true',
         PARAMETERS_SECRETS_EXTENSION_CACHE_SIZE: '10',
       },
@@ -498,6 +599,7 @@ export class FootSolutionsStack extends Stack {
 
     // Allow user-facing handler to invoke the sync Lambda asynchronously
     heartlandSyncFn.grantInvoke(heartlandFn);
+    heartlandFn.addEnvironment('HEARTLAND_SYNC_FN_NAME', 'foot-solutions-pos-sync');
 
     // Schedule the sync to run every 6 hours
     new events.Rule(this, 'HeartlandSyncSchedule', {
@@ -545,9 +647,15 @@ export class FootSolutionsStack extends Stack {
     );
 
     // Lambda integrations
+    // API Gateway HTTP API caps integration timeouts at 29 seconds.
+    // The Tax Lambda itself runs up to 90s for retries / non-API invokes,
+    // but the synchronous /tax/calculate request must finish within 29s
+    // or API Gateway will return a 504. Opus 4.7 typically completes the
+    // tax-analysis prompt in 15-25s.
     const taxIntegration = new apigwv2integrations.HttpLambdaIntegration(
       'TaxIntegration',
-      taxFn
+      taxFn,
+      { timeout: Duration.seconds(29) }
     );
     const credIntegration = new apigwv2integrations.HttpLambdaIntegration(
       'CredIntegration',
@@ -565,6 +673,12 @@ export class FootSolutionsStack extends Stack {
     // Tax routes
     httpApi.addRoutes({
       path: '/tax/calculate',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: taxIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/tax/cpa-package/send',
       methods: [apigwv2.HttpMethod.POST],
       integration: taxIntegration,
       authorizer: jwtAuthorizer,
@@ -670,6 +784,24 @@ export class FootSolutionsStack extends Stack {
       authorizer: jwtAuthorizer,
     });
 
+    // Integrations routes (admin-only — read/update API secrets)
+    const integrationsIntegration = new apigwv2integrations.HttpLambdaIntegration(
+      'IntegrationsIntegration',
+      integrationsFn
+    );
+    httpApi.addRoutes({
+      path: '/integrations',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: integrationsIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/integrations/{id}',
+      methods: [apigwv2.HttpMethod.PUT],
+      integration: integrationsIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
     // POS routes (Heartland integration)
     httpApi.addRoutes({
       path: '/pos/dashboard',
@@ -762,6 +894,82 @@ export class FootSolutionsStack extends Stack {
       authorizer: jwtAuthorizer,
     });
     httpApi.addRoutes({
+      path: '/pos/vendor-comment-reply',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/vendor-comment-add',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    // ── Campaign / customer database ────────────────────────────────
+    httpApi.addRoutes({
+      path: '/pos/customers',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/customers/{id}/history',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/pos/customers/sync',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/campaign/send',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    // PUBLIC route — no JWT authorizer. Hit by the unsubscribe link in
+    // every campaign email. Token signature gates abuse.
+    httpApi.addRoutes({
+      path: '/campaign/unsubscribe',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+    });
+    httpApi.addRoutes({
+      path: '/admin/aws-costs',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: heartlandIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // Grant SES SendEmail for the vendor comment reply notification
+    heartlandFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'HeartlandSesSend',
+        effect: iam.Effect.ALLOW,
+        actions: ['ses:SendEmail'],
+        resources: [
+          `arn:aws:ses:us-east-1:${this.account}:identity/fsmanagementsystem.com`,
+        ],
+      })
+    );
+
+    // Grant Cost Explorer read for the admin cost-tracker dashboard
+    // (ce:GetCostAndUsage doesn't support resource-level permissions)
+    heartlandFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'HeartlandCostExplorerRead',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'ce:GetCostAndUsage',
+          'ce:GetTags',
+        ],
+        resources: ['*'],
+      })
+    );
+    httpApi.addRoutes({
       path: '/admin/settings',
       methods: [apigwv2.HttpMethod.GET],
       integration: heartlandIntegration,
@@ -787,7 +995,9 @@ export class FootSolutionsStack extends Stack {
       environment: {
         TABLE_NAME: table.tableName,
         OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
-        BEDROCK_MODEL_ID: 'us.amazon.nova-pro-v1:0',
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        GMAIL_ANALYSIS_FN: 'foot-solutions-gmail-analysis',
+        ADMIN_EMAIL,
       },
       bundling: {
         minify: true,
@@ -799,17 +1009,25 @@ export class FootSolutionsStack extends Stack {
     });
     Tags.of(chatFn).add('Component', 'ai-chat');
 
-    // Grant DynamoDB read for context fetching
-    table.grantReadData(chatFn);
+    // Grant DynamoDB read for context fetching + write for conversation history
+    table.grantReadWriteData(chatFn);
 
-    // Grant Bedrock InvokeModel for Nova 2 Lite
+    // Grant Bedrock InvokeModel — Claude Opus 4.7 (primary) + Sonnet 4.6 + Nova fallbacks
     chatFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'ChatBedrockInvoke',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel'],
         resources: [
-          // Nova Pro (primary)
+          // Claude Opus 4.7 (primary)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7',
+          // Claude Sonnet 4.6 (fallback)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
+          // Nova Pro (fallback)
           'arn:aws:bedrock:us-east-1:*:inference-profile/us.amazon.nova-pro-v1:0',
           'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-pro-v1:0',
           'arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0',
@@ -834,6 +1052,157 @@ export class FootSolutionsStack extends Stack {
       integration: chatIntegration,
       authorizer: jwtAuthorizer,
     });
+    httpApi.addRoutes({
+      path: '/chat/history',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.POST],
+      integration: chatIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/chat/history/{sessionId}',
+      methods: [apigwv2.HttpMethod.GET, apigwv2.HttpMethod.DELETE],
+      integration: chatIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // ── 10b-bis. FS Assistant edge Lambda + /assistant/chat ────────
+    //
+    // Tasks 11.x + 12.1 from the fs-assistant-orchestrator spec.
+    //
+    // The edge Lambda is the thin client that fronts the AgentCore
+    // Runtime (provisioned by `FsAssistantStack`). It does:
+    //   - Cognito JWT extraction → callerUserId / isAdmin
+    //   - 8000-char + 50-turn validation
+    //   - 60 req/min rate limit (DynamoDB-backed)
+    //   - InvokeAgentRuntime against the runtime ARN
+    //   - History persistence under CHAT_HISTORY#assistant#<sessionId>
+    //   - CloudWatch metrics (FsAssistant namespace)
+    //
+    // Gated behind `ASSISTANT_ENABLED=false` until Task 18.1 cutover.
+    // The runtime ARN is wired in via Fn.importValue from
+    // FsAssistantStack so the ECR + role + runtime live in their own
+    // stack lifecycle. To avoid a hard cross-stack dependency before
+    // FsAssistantStack is deployed, we read the env from CDK context
+    // and fall back to a placeholder string the Lambda treats as
+    // "not configured" (and returns 500).
+    const fsAssistantRuntimeArnFromContext =
+      this.node.tryGetContext('fsAssistantRuntimeArn');
+    const fsAssistantRuntimeArn =
+      typeof fsAssistantRuntimeArnFromContext === 'string'
+        ? fsAssistantRuntimeArnFromContext
+        : '__not-yet-deployed__';
+    const assistantEnabled =
+      this.node.tryGetContext('assistantEnabled') === true ||
+      this.node.tryGetContext('assistantEnabled') === 'true';
+
+    const assistantEdgeFn = new nodejs.NodejsFunction(
+      this,
+      'AssistantEdgeHandler',
+      {
+        functionName: 'foot-solutions-assistant-edge',
+        runtime: lambda.Runtime.NODEJS_20_X,
+        entry: '../lambda/assistant/index.ts',
+        handler: 'handler',
+        projectRoot: '../lambda',
+        depsLockFilePath: '../lambda/package-lock.json',
+        // 5-minute timeout — the background self-invocation runs the
+        // AgentCore + Sonnet 4.6 1M-context orchestrator turn which can
+        // take 30-90s in practice. The HTTP request handler returns in
+        // <1s; only the background worker uses the long timeout.
+        timeout: Duration.minutes(5),
+        memorySize: 512,
+        environment: {
+          TABLE_NAME: table.tableName,
+          ADMIN_EMAIL,
+          FS_ASSISTANT_RUNTIME_ARN: fsAssistantRuntimeArn,
+          ASSISTANT_ENABLED: assistantEnabled ? 'true' : 'false',
+          RUNTIME_QUALIFIER: 'DEFAULT',
+        },
+        bundling: {
+          minify: true,
+          sourceMap: false,
+          target: 'node20',
+          externalModules: ['@aws-sdk/*'],
+        },
+        description:
+          'FS Assistant edge Lambda — fronts the AgentCore Runtime orchestrator',
+      }
+    );
+    Tags.of(assistantEdgeFn).add('Component', 'fs-assistant');
+
+    // DynamoDB — history + rate-limit counter, scoped to caller's PK.
+    table.grantReadWriteData(assistantEdgeFn);
+
+    // AgentCore InvokeAgentRuntime + InvokeAgentRuntimeForUser.
+    assistantEdgeFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AssistantInvokeAgentCore',
+        effect: iam.Effect.ALLOW,
+        actions: [
+          'bedrock-agentcore:InvokeAgentRuntime',
+          'bedrock-agentcore:InvokeAgentRuntimeForUser',
+        ],
+        // Wildcard while runtime ARN is dynamic; tighten to the
+        // FsAssistantStack export once the runtime is live.
+        resources: ['*'],
+      })
+    );
+
+    // Self-invoke — async background worker pattern. The handler
+    // self-invokes with `InvocationType: 'Event'` and an internal
+    // payload to run the long orchestrator call past API GW's 30s cap.
+    // Uses a hardcoded function-name ARN (rather than grantInvoke on
+    // the function itself) to avoid a CFN circular dependency between
+    // the function and its role.
+    assistantEdgeFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AssistantSelfInvoke',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:${this.region}:${this.account}:function:foot-solutions-assistant-edge`,
+        ],
+      })
+    );
+
+    // CloudWatch custom metrics.
+    assistantEdgeFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'AssistantPutMetrics',
+        effect: iam.Effect.ALLOW,
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      })
+    );
+
+    const assistantEdgeIntegration = new apigwv2integrations.HttpLambdaIntegration(
+      'AssistantEdgeIntegration',
+      assistantEdgeFn,
+      { timeout: Duration.seconds(29) }
+    );
+
+    httpApi.addRoutes({
+      path: '/assistant/chat',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: assistantEdgeIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    // GET endpoint — frontend polls this every 2-3s while the
+    // background worker (self-invoked async) runs the orchestrator.
+    // Returns `status: processing|complete|error` plus the result
+    // payload when complete.
+    httpApi.addRoutes({
+      path: '/assistant/chat/{sessionId}',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: assistantEdgeIntegration,
+      authorizer: jwtAuthorizer,
+    });
+
+    new CfnOutput(this, 'AssistantEdgeFunctionArn', {
+      value: assistantEdgeFn.functionArn,
+      description: 'assistantEdgeFn Lambda ARN',
+    });
 
     // The Sales chatbot can also read Gmail (for vendor / inbox context).
     // Same secret prefix the daily-report Lambda uses.
@@ -847,6 +1216,33 @@ export class FootSolutionsStack extends Stack {
         ],
       })
     );
+    // Allow the Sales chatbot to invoke the Gmail Analysis Lambda so it can
+    // delegate inbox questions to the Inbox Assistant agent.
+    chatFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ChatInvokeGmailAnalysis',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:us-east-1:${this.account}:function:foot-solutions-gmail-analysis`,
+        ],
+      })
+    );
+
+    // get_sales_summary triggers an on-demand today-only Heartland sync
+    // when the requested date range includes today, so chatFn needs to
+    // invoke the sync Lambda synchronously.
+    chatFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'ChatInvokeHeartlandSyncToday',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:us-east-1:${this.account}:function:foot-solutions-pos-sync`,
+        ],
+      })
+    );
+    chatFn.addEnvironment('HEARTLAND_SYNC_FN', 'foot-solutions-pos-sync');
 
     // ── 10b1. Gmail Analysis Lambda (analyze + chat over inbox) ──────
     const gmailAnalysisFn = new nodejs.NodejsFunction(this, 'GmailAnalysisHandler', {
@@ -866,11 +1262,11 @@ export class FootSolutionsStack extends Stack {
       environment: {
         TABLE_NAME: table.tableName,
         OWNER_USER_ID: '94989478-c051-7005-9033-3d722963c59b',
-        // Claude Haiku 4.5 — primary analysis model. Same tool-use and
-        // structured-output quality as Sonnet for this workload at ~3×
-        // lower latency and ~3× lower cost. Override with BEDROCK_MODEL_ID
-        // to swap models without redeploying.
-        BEDROCK_MODEL_ID: 'global.anthropic.claude-haiku-4-5-20251001-v1:0',
+        // Claude Sonnet 4.6 — upgrade to Opus 4.7 once Marketplace access is enabled.
+        // To upgrade: AWS Console → Bedrock → Model access → subscribe to Claude Opus 4.7.
+        BEDROCK_MODEL_ID: 'global.anthropic.claude-sonnet-4-6',
+        SALES_CHAT_FN: 'foot-solutions-chat-handler',
+        ADMIN_EMAIL,
       },
       bundling: {
         minify: true,
@@ -886,21 +1282,25 @@ export class FootSolutionsStack extends Stack {
     // and the per-message Gmail cache (sk=GMAIL#MSG/THREAD/VENDOR/KIND…).
     table.grantReadWriteData(gmailAnalysisFn);
 
-    // Bedrock InvokeModel — Claude Sonnet 4.6 (primary) + 4.5 + Nova Pro fallbacks
+    // Bedrock InvokeModel — Claude Opus 4.7 (primary) + Sonnet 4.6 + fallbacks
     gmailAnalysisFn.addToRolePolicy(
       new iam.PolicyStatement({
         sid: 'GmailAnalysisBedrockInvoke',
         effect: iam.Effect.ALLOW,
         actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
         resources: [
-          // Claude Haiku 4.5 (primary)
-          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0',
-          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0',
-          'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
-          // Claude Sonnet 4.6 (fallback / legacy)
+          // Claude Opus 4.7 (primary — best for complex inbox analysis)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-4-7',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-4-7',
+          // Claude Sonnet 4.6 (fallback)
           'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-6',
           'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-4-6',
           'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
+          // Claude Haiku 4.5 (fast fallback)
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-haiku-4-5-20251001-v1:0',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-4-5-20251001-v1:0',
+          'arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0',
           // Claude Sonnet 4.5 (fallback)
           'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0',
           'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0',
@@ -940,6 +1340,18 @@ export class FootSolutionsStack extends Stack {
         ],
       })
     );
+    // Allow the Inbox Assistant to invoke the Sales chatbot Lambda so it can
+    // delegate POS/inventory/staff questions to the Sales Assistant agent.
+    gmailAnalysisFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'GmailAnalysisInvokeSalesChat',
+        effect: iam.Effect.ALLOW,
+        actions: ['lambda:InvokeFunction'],
+        resources: [
+          `arn:aws:lambda:us-east-1:${this.account}:function:foot-solutions-chat-handler`,
+        ],
+      })
+    );
 
     const gmailAnalysisIntegration = new apigwv2integrations.HttpLambdaIntegration(
       'GmailAnalysisIntegration',
@@ -960,6 +1372,18 @@ export class FootSolutionsStack extends Stack {
     });
     httpApi.addRoutes({
       path: '/gmail/cache-stats',
+      methods: [apigwv2.HttpMethod.GET],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/gmail/follow-up/verify',
+      methods: [apigwv2.HttpMethod.POST],
+      integration: gmailAnalysisIntegration,
+      authorizer: jwtAuthorizer,
+    });
+    httpApi.addRoutes({
+      path: '/gmail/attachment',
       methods: [apigwv2.HttpMethod.GET],
       integration: gmailAnalysisIntegration,
       authorizer: jwtAuthorizer,

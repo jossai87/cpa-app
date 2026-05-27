@@ -57,6 +57,9 @@ interface CachedRow {
   vendorBrand: string | null;
   kind: string | null;
   hasAttachment: boolean;
+  attachments?: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }>;
+  /** Which Gmail account this message came from. Absent = primary (flowermound). */
+  sourceAccount?: string;
 }
 
 function brandSlug(b: string): string {
@@ -160,6 +163,8 @@ export async function cacheQuery(args: CachedQueryArgs): Promise<{
       vendorBrand: r.vendorBrand,
       kind: r.kind,
       hasAttachment: r.hasAttachment,
+      attachments: r.attachments ?? [],
+      sourceAccount: r.sourceAccount,
     })),
   };
 }
@@ -263,33 +268,44 @@ export async function resolveThreadIds(
   if (!messageIds || messageIds.length === 0) return {};
   const out: Record<string, string> = {};
 
-  // Query the canonical prefix and filter client-side. The cache has
-  // O(1500) rows max so this is fine; there's no GSI on `id`.
-  // Optimization: parallel scans by date prefix would be faster but the
-  // analysis path is already async background-running, so simple wins.
+  // Query the canonical prefix and filter client-side. We MUST paginate
+  // through every page until we either find the message OR exhaust the
+  // cache. DynamoDB applies FilterExpression per page (after the 1MB
+  // read limit), so a single Query that returns no Items doesn't mean
+  // "not in the cache" — it just means "not on the first page".
   await Promise.all(
     messageIds.map(async (id) => {
       try {
-        const res = await docClient.send(
-          new QueryCommand({
-            TableName: TABLE_NAME,
-            KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
-            FilterExpression: '#i = :i',
-            ExpressionAttributeNames: { '#i': 'id' },
-            ExpressionAttributeValues: {
-              ':u': OWNER_USER_ID,
-              ':p': 'GMAIL#MSG#',
-              ':i': id,
-            },
-            ProjectionExpression: 'threadId, #i',
-          })
-        );
-        const found = (res.Items ?? []).find((it) => it['id'] === id);
-        if (found && found['threadId']) {
-          out[id] = String(found['threadId']);
-        } else {
-          out[id] = id; // fallback: messageId itself
+        let exclusiveStartKey: Record<string, unknown> | undefined;
+        let resolved: string | null = null;
+        // Hard upper bound on pages so a runaway loop can't burn DDB
+        // capacity. The cache is bounded at O(thousands), and each page
+        // is up to 1MB worth of rows — 50 pages is far past worst case.
+        for (let page = 0; page < 50; page++) {
+          const res = await docClient.send(
+            new QueryCommand({
+              TableName: TABLE_NAME,
+              KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
+              FilterExpression: '#i = :i',
+              ExpressionAttributeNames: { '#i': 'id' },
+              ExpressionAttributeValues: {
+                ':u': OWNER_USER_ID,
+                ':p': 'GMAIL#MSG#',
+                ':i': id,
+              },
+              ProjectionExpression: 'threadId, #i',
+              ExclusiveStartKey: exclusiveStartKey,
+            })
+          );
+          const found = (res.Items ?? []).find((it) => it['id'] === id);
+          if (found && found['threadId']) {
+            resolved = String(found['threadId']);
+            break;
+          }
+          if (!res.LastEvaluatedKey) break;
+          exclusiveStartKey = res.LastEvaluatedKey;
         }
+        out[id] = resolved ?? id; // fallback: messageId itself
       } catch {
         out[id] = id;
       }

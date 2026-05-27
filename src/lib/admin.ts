@@ -9,8 +9,6 @@
  * Visibility keys (use these in components):
  *   dashboard.tile.tax              — CPA Tax Assistant tile
  *   dashboard.tile.gmail            — Gmail Assistant tile
- *   dashboard.tile.payroll          — Payroll tile (Coming Soon)
- *   dashboard.tile.compliance       — Franchise Compliance tile (Coming Soon)
  *   credentials.gmail-corporate     — Foot Solutions Corporate Gmail entry
  *   sales.tab.reporting             — Sales & Revenue Reporting tab
  *   sales.trends.totalRevenue       — Total Revenue stat card on Trends tab
@@ -24,15 +22,20 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from './auth';
 import api from './api';
 
-/** The owner email — full visibility, can configure admin settings. */
-export const ADMIN_EMAIL = 'jandoossai@gmail.com';
+/** The owner email — full visibility, can configure admin settings.
+ *
+ * Source of truth lives in the CDK stack (`ADMIN_EMAIL` constant in
+ * `infrastructure/lib/foot-solutions-stack.ts`). The SPA reads it from
+ * `VITE_ADMIN_EMAIL` so the build can stay environment-agnostic; the
+ * hard-coded fallback covers local dev / Storybook where the env var
+ * may not be set. See `.env.example` for the documented key. */
+export const ADMIN_EMAIL =
+  (import.meta.env.VITE_ADMIN_EMAIL as string | undefined) ?? 'jandoossai@gmail.com';
 
 /** All visibility keys + hardcoded defaults for non-admins. */
 export const VISIBILITY_KEYS = {
   'dashboard.tile.tax':            { label: 'Dashboard — CPA Tax Assistant tile',  defaultVisible: false },
   'dashboard.tile.gmail':          { label: 'Dashboard — Gmail Assistant tile',    defaultVisible: true  },
-  'dashboard.tile.payroll':        { label: 'Dashboard — Payroll tile (Coming Soon)', defaultVisible: false },
-  'dashboard.tile.compliance':     { label: 'Dashboard — Franchise Compliance tile (Coming Soon)', defaultVisible: false },
   'credentials.gmail-corporate':   { label: 'Credentials — Foot Solutions Corporate Gmail', defaultVisible: false },
   'sales.tab.reporting':           { label: 'Sales & Revenue — Reporting tab',     defaultVisible: false },
   'sales.trends.totalRevenue':     { label: 'Sales & Revenue — Total Revenue (Trends tab)', defaultVisible: false },

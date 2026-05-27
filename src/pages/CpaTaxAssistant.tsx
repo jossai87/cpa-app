@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, AlertTriangle, Trash2 } from 'lucide-react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import api from '../lib/api';
 import TaxForm, { TaxFormHandle } from '../components/TaxForm';
 import TaxResult from '../components/TaxResult';
@@ -16,6 +16,11 @@ import type { TaxFormData, TaxSession } from '../types';
 export default function CpaTaxAssistant() {
   const queryClient = useQueryClient();
   const [activeSession, setActiveSession] = useState<TaxSession | null>(null);
+  // Session selected from history — shown inline below the history table
+  const [historySession, setHistorySession] = useState<TaxSession | null>(null);
+  // Tracks the in-flight async analysis. While set, the page polls
+  // GET /tax/history/{id} until status is 'complete' or 'error'.
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   const [hydrationMsg, setHydrationMsg] = useState<string | null>(null);
   const [resetState, setResetState] = useState<
     'idle' | 'confirming' | 'resetting' | 'done' | 'error'
@@ -27,11 +32,15 @@ export default function CpaTaxAssistant() {
   const { data: documents } = useDocuments();
   const deleteAllMut = useDeleteAllDocuments();
 
+  // POST /tax/calculate now returns 202 immediately with { sessionId, status:'pending' }.
+  // We capture the sessionId and start polling below.
   const calculateMutation = useMutation({
     mutationFn: (formData: TaxFormData) =>
       api.post<TaxSession>('/tax/calculate', formData).then((r) => r.data),
     onSuccess: (data) => {
+      // Show the pending session in the result panel so the spinner has context
       setActiveSession(data);
+      setPendingSessionId(data.sessionId);
       // Clear the draft on success so the form resets for the next session
       formRef.current?.clearDraft();
       // Allow hydration again for the next analysis cycle
@@ -39,6 +48,34 @@ export default function CpaTaxAssistant() {
       void queryClient.invalidateQueries({ queryKey: ['tax', 'history'] });
     },
   });
+
+  // Poll the pending session until the backend marks it complete or errored.
+  // Stops automatically when pendingSessionId is null.
+  const pollingQuery = useQuery<TaxSession>({
+    queryKey: ['tax', 'session', pendingSessionId],
+    queryFn: () =>
+      api
+        .get<TaxSession>(`/tax/history/${pendingSessionId}`)
+        .then((r) => r.data),
+    enabled: !!pendingSessionId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      if (status === 'complete' || status === 'error') return false;
+      return 2500; // poll every 2.5s while pending
+    },
+    refetchIntervalInBackground: false,
+  });
+
+  // When polling resolves, hydrate the active session and stop polling.
+  useEffect(() => {
+    const polled = pollingQuery.data;
+    if (!polled || !pendingSessionId) return;
+    if (polled.status === 'complete' || polled.status === 'error') {
+      setActiveSession(polled);
+      setPendingSessionId(null);
+      void queryClient.invalidateQueries({ queryKey: ['tax', 'history'] });
+    }
+  }, [pollingQuery.data, pendingSessionId, queryClient]);
 
   // Build per-field provenance from persisted documents:
   //   { fieldName: [{ fileName, amount, confidence }, ...] }
@@ -107,8 +144,14 @@ export default function CpaTaxAssistant() {
     calculateMutation.mutate(formData);
   };
 
+  const historyResultRef = useRef<HTMLDivElement>(null);
+
   const handleSelectSession = (session: TaxSession) => {
-    setActiveSession(session);
+    setHistorySession(session);
+    // Scroll to the result after a tick so the DOM has rendered
+    setTimeout(() => {
+      historyResultRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
   };
 
   // When a doc is deleted from the sidebar, subtract its applied totals from the form
@@ -155,6 +198,9 @@ export default function CpaTaxAssistant() {
   const handleSessionDeleted = (sessionId: string) => {
     if (activeSession?.sessionId === sessionId) {
       setActiveSession(null);
+    }
+    if (historySession?.sessionId === sessionId) {
+      setHistorySession(null);
     }
   };
 
@@ -268,14 +314,25 @@ export default function CpaTaxAssistant() {
               </div>
             )}
 
-            {calculateMutation.isPending && (
+            {(calculateMutation.isPending || pendingSessionId) && (
               <div className="flex items-center gap-3 text-sm text-slate-500">
                 <Spinner size="sm" />
-                Analyzing your tax data with AI…
+                {calculateMutation.isPending
+                  ? 'Submitting your tax data…'
+                  : 'Analyzing with Claude Sonnet 4.6 — this can take 30-90 seconds…'}
               </div>
             )}
 
-            {activeSession?.result && (
+            {activeSession?.status === 'error' && activeSession.errorMessage && (
+              <div
+                role="alert"
+                className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700"
+              >
+                {activeSession.errorMessage}
+              </div>
+            )}
+
+            {activeSession?.result && activeSession.status === 'complete' && (
               <section aria-labelledby="tax-result-heading">
                 <h2 id="tax-result-heading" className="text-lg font-medium text-slate-800 mb-4">
                   Analysis Result
@@ -306,7 +363,47 @@ export default function CpaTaxAssistant() {
                 onSelectSession={handleSelectSession}
                 onSessionDeleted={handleSessionDeleted}
                 onReloadSession={handleReloadSession}
+                selectedSessionId={historySession?.sessionId}
               />
+
+              {/* Inline result — shown when a history row is selected */}
+              {historySession && (
+                <div ref={historyResultRef} className="mt-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-base font-medium text-slate-800">
+                      Analysis — {historySession.taxYear} ({historySession.entityType})
+                      <span className="ml-2 text-xs text-slate-400 font-normal">
+                        {new Intl.DateTimeFormat('en-US', {
+                          month: 'short', day: 'numeric', year: 'numeric',
+                          hour: 'numeric', minute: '2-digit',
+                        }).format(new Date(historySession.createdAt))}
+                      </span>
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setHistorySession(null)}
+                      className="text-xs text-slate-400 hover:text-slate-700 transition"
+                      aria-label="Close history result"
+                    >
+                      ✕ Close
+                    </button>
+                  </div>
+
+                  {historySession.status === 'pending' && (
+                    <div className="flex items-center gap-2 text-sm text-slate-500 py-4">
+                      <Spinner size="sm" /> Analysis still running…
+                    </div>
+                  )}
+                  {historySession.status === 'error' && (
+                    <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+                      {historySession.errorMessage ?? 'Analysis failed.'}
+                    </div>
+                  )}
+                  {historySession.status === 'complete' && historySession.result && (
+                    <TaxResult taxYear={historySession.taxYear} result={historySession.result} />
+                  )}
+                </div>
+              )}
             </section>
           </div>
 

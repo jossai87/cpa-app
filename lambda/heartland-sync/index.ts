@@ -61,6 +61,7 @@ interface HeartlandTicket {
   completed_at: string | null;
   local_completed_at: string | null;
   customer_name: string | null;
+  customer_id?: number | null;
   sales_rep: string;
   'completed?': boolean;
   'voided?': boolean;
@@ -177,11 +178,29 @@ async function syncPaymentsAndTickets(secret: HeartlandSecret): Promise<{
   windowStart.setUTCDate(windowStart.getUTCDate() - 35);
   const fromDate = fmtDate.format(windowStart);
 
-  // Payments — filter by completed_at date range so we never miss a day
-  // regardless of how many total records exist in the account.
-  // sort=completed_at sorts ascending; we want newest-first for efficiency
-  // but the date filter is what guarantees completeness.
-  const paymentPath = `payments?sort=completed_at&completed_at[gte]=${fromDate}&completed_at[lte]=${today}`;
+  // Payments — filter by `local_completed_at` (store-local Central
+  // time) using Heartland's documented JSON filter syntax (per
+  // https://dev.retail.heartland.us/ §Filtering / "Using JSON").
+  // Why local_completed_at vs completed_at:
+  //   completed_at is UTC, but the rollup keys bucket by store-local
+  //   date (we slice local_completed_at[:10]). For dates near midnight
+  //   UTC, a UTC filter misses payments that happened today in Central.
+  //   Direct probe of Heartland confirms local_completed_at returns the
+  //   correct count for today while completed_at returns 0.
+  // Why no location_id filter:
+  //   Heartland's /payments endpoint doesn't accept location_id as a
+  //   filter (returns 400 invalid_request). Payments belong to a sales
+  //   transaction; location is on the ticket. We filter client-side
+  //   below using each payment's joined ticket.
+  const paymentFilter = JSON.stringify({
+    local_completed_at: {
+      $gte: `${fromDate}T00:00:00`,
+      $lte: `${today}T23:59:59`,
+    },
+    status: 'complete',
+  });
+  const paymentPath =
+    `payments?sort=local_completed_at&_filter=${encodeURIComponent(paymentFilter)}`;
   const firstPage = await fetchPage<HeartlandPayment>(secret, paymentPath, 1);
   const totalPages = Math.ceil(firstPage.total / 200);
 
@@ -191,8 +210,20 @@ async function syncPaymentsAndTickets(secret: HeartlandSecret): Promise<{
     payments.push(...data.results);
   }
 
-  // Tickets — same date-filtered approach for enrichment (discounts, customers, reps)
-  const ticketPath = `sales/tickets?completed_at[gte]=${fromDate}&completed_at[lte]=${today}`;
+  // Tickets — filter by local_completed_at only. The `completed?` and
+  // `voided?` boolean fields aren't filterable on this endpoint
+  // (Heartland returns 400). The rollup loop below already filters
+  // client-side via `t['completed?'] && !t['voided?']`. Same for
+  // location — `source_location_id` filter returns 400, so we filter
+  // client-side after fetching.
+  const ticketFilter = JSON.stringify({
+    local_completed_at: {
+      $gte: `${fromDate}T00:00:00`,
+      $lte: `${today}T23:59:59`,
+    },
+  });
+  const ticketPath =
+    `sales/tickets?_filter=${encodeURIComponent(ticketFilter)}`;
   const firstTPage = await fetchPage<HeartlandTicket>(secret, ticketPath, 1);
   const totalTPages = Math.ceil(firstTPage.total / 200);
 
@@ -747,7 +778,386 @@ async function writeSyncStatus(status: Record<string, unknown>): Promise<void> {
   }));
 }
 
-// ── Main handler ─────────────────────────────────────────────────────
+// ── Sync: Customers (full directory pull) ────────────────────────────
+//
+// Pulls every customer from Heartland's /customers endpoint into DDB so
+// the campaign card can filter / search without hitting the live API
+// every page load. Writes one canonical row per customer plus a single
+// rollup stats row.
+//
+// SK shape:
+//   POS#CUSTOMER#<id>     — canonical row
+//   POS#CUSTOMER_STATS    — count rollup (total, withEmail, optedIn, etc.)
+//
+// 28k+ customers → at 200 per_page that's ~140 pages. Fast at HL's
+// current latency (~150ms/page). Total walltime ~25-40s.
+
+interface HeartlandCustomer {
+  id: number;
+  public_id?: string;
+  uuid?: string;
+  first_name?: string | null;
+  last_name?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone_number?: string | null;
+  'active?'?: boolean;
+  'promotional_emails?'?: boolean;
+  'promotional_messages?'?: boolean;
+  loyalty_points_balance?: number;
+  loyalty_points_total?: number;
+  created_at?: string;
+  updated_at?: string;
+  deleted_at?: string | null;
+  custom?: Record<string, unknown>;
+}
+
+async function syncCustomers(secret: HeartlandSecret): Promise<{
+  customersWritten: number;
+  pagesPulled: number;
+  totalReported: number;
+  withEmail: number;
+  optedIn: number;
+  reachableEmails: number;
+}> {
+  const perPage = 200;
+  let page = 1;
+  let pagesPulled = 0;
+  let customersWritten = 0;
+  let withEmail = 0;
+  let optedIn = 0;
+  let reachableEmails = 0;
+  let activeCount = 0;
+  let totalReported = 0;
+  // Bucket signups by month for trend charts.
+  const signupsByMonth = new Map<string, number>();
+
+  while (true) {
+    const res = await fetchPage<HeartlandCustomer>(
+      secret,
+      'customers',
+      page,
+      perPage
+    );
+    pagesPulled++;
+    if (page === 1) totalReported = res.total ?? 0;
+
+    // Batch-write each page (DDB BatchWrite caps at 25 items per request).
+    const items = res.results.map((c) => {
+      // Track stats inline.
+      const email = (c.email ?? '').trim();
+      if (email) withEmail++;
+      // Strict opt-in: only customers explicitly flagged true.
+      const optedInStrict = email && c['promotional_emails?'] === true;
+      if (optedInStrict) optedIn++;
+      // Permissive reach: anyone with an email and not actively unsubscribed
+      // via our app-level flag (which is set via the unsubscribe link in
+      // any prior campaign — at sync time we don't know that yet, so
+      // treat as 0). After at least one campaign goes out, the campaign
+      // path's own filter is the authoritative count.
+      if (email) reachableEmails++;
+      if (c['active?']) activeCount++;
+      if (c.created_at) {
+        const month = c.created_at.slice(0, 7); // YYYY-MM
+        signupsByMonth.set(month, (signupsByMonth.get(month) ?? 0) + 1);
+      }
+
+      const firstName = (c.first_name ?? '').trim();
+      const lastName = (c.last_name ?? '').trim();
+      const fullName =
+        c.name?.trim() ||
+        [firstName, lastName].filter(Boolean).join(' ').trim() ||
+        '(no name)';
+
+      return {
+        userId: OWNER_USER_ID,
+        sk: `POS#CUSTOMER#${c.id}`,
+        // Canonical fields used by query / filter.
+        customerId: c.id,
+        publicId: c.public_id ?? null,
+        firstName,
+        lastName,
+        name: fullName,
+        nameLower: fullName.toLowerCase(),
+        email: email,
+        emailLower: email.toLowerCase(),
+        phoneNumber: c.phone_number ?? null,
+        active: c['active?'] ?? true,
+        promotionalEmails:
+          email && c['promotional_emails?'] !== false ? true : false,
+        promotionalMessages: c['promotional_messages?'] === true,
+        loyaltyBalance: c.loyalty_points_balance ?? 0,
+        loyaltyTotal: c.loyalty_points_total ?? 0,
+        createdAt: c.created_at ?? null,
+        updatedAt: c.updated_at ?? null,
+        deletedAt: c.deleted_at ?? null,
+        signupMonth: c.created_at?.slice(0, 7) ?? null,
+        // Unsubscribe state — flipped by GET /campaign/unsubscribe. Kept
+        // separate from `promotionalEmails` so we can distinguish "vendor
+        // says no" from "customer hit our unsubscribe link" when needed.
+        unsubscribed: false,
+      };
+    });
+
+    // Write in batches of 25.
+    for (let i = 0; i < items.length; i += 25) {
+      const batch = items.slice(i, i + 25);
+      try {
+        await Promise.all(
+          batch.map((item) =>
+            docClient.send(new PutCommand({ TableName: TABLE_NAME, Item: item }))
+          )
+        );
+        customersWritten += batch.length;
+      } catch (err) {
+        console.error('customer batch write failed:', (err as Error).message);
+      }
+    }
+
+    if (page >= (res.pages ?? 1)) break;
+    page++;
+    // Safety cap — 200 pages * 200 per_page = 40k customers max.
+    if (page > 200) break;
+  }
+
+  // Write rollup stats row.
+  const monthEntries = [...signupsByMonth.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-24); // last 24 months for trend chart
+  await docClient.send(
+    new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        userId: OWNER_USER_ID,
+        sk: 'POS#CUSTOMER_STATS',
+        totalCustomers: customersWritten,
+        totalReported,
+        withEmail,
+        optedIn,
+        reachableEmails,
+        activeCount,
+        signupsByMonth: monthEntries.map(([month, count]) => ({ month, count })),
+        updatedAt: new Date().toISOString(),
+      },
+    })
+  );
+
+  return {
+    customersWritten,
+    pagesPulled,
+    totalReported,
+    withEmail,
+    optedIn,
+    reachableEmails,
+  };
+}
+
+/**
+ * Stamp every customer row with their `lastPurchaseAt` date by scanning
+ * completed tickets from the last 24 months. Then aggregate dormancy
+ * buckets (6m and 12m) into the stats row.
+ *
+ * Strategy:
+ *   1. Pull all completed tickets `local_completed_at >= now - 24mo`
+ *      with customer_id, take the max date per customer.
+ *   2. UpdateItem each customer row with lastPurchaseAt.
+ *   3. Re-scan customer rows to count dormancy buckets, write to stats.
+ *
+ * 28k customers + 24mo of tickets is large — typical store does
+ * 8-12k tickets/year so ~16-24k tickets over 24mo. At 200 per_page that's
+ * ~80-120 pages. Total wall clock ~30-60s. Stays under Lambda's 15min cap.
+ */
+async function syncCustomerRecency(
+  secret: HeartlandSecret
+): Promise<{
+  ticketsScanned: number;
+  customersStamped: number;
+  dormant6m: number;
+  dormant12m: number;
+}> {
+  // ── 1. Pull tickets ────────────────────────────────────────────────
+  const STORE_TZ = 'America/Chicago';
+  const fmtDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: STORE_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const today = fmtDate.format(new Date());
+
+  // Heartland's sales/tickets endpoint returns HTTP 500 when asked to
+  // page through 24 months in a single call (~16-24k records). Window
+  // the query into 3-month chunks and merge the results — mirrors the
+  // pattern syncPaymentsAndTickets uses for its 35-day window.
+  // Filter operators MUST be prefixed with $ ($gte, $lte) to match
+  // Heartland's documented JSON filter syntax — without the prefix
+  // the endpoint silently misbehaves.
+  const lastByCustomer = new Map<number, string>();
+  let ticketsScanned = 0;
+
+  // Build 8 windows of 3 months each, walking back from today.
+  const windows: Array<{ from: string; to: string }> = [];
+  for (let i = 0; i < 8; i++) {
+    const end = new Date();
+    end.setMonth(end.getMonth() - 3 * i);
+    const start = new Date();
+    start.setMonth(start.getMonth() - 3 * (i + 1));
+    windows.push({
+      from: fmtDate.format(start),
+      to: i === 0 ? today : fmtDate.format(end),
+    });
+  }
+
+  for (const win of windows) {
+    const filter = JSON.stringify({
+      local_completed_at: {
+        $gte: `${win.from}T00:00:00`,
+        $lte: `${win.to}T23:59:59`,
+      },
+    });
+    const ticketPath = `sales/tickets?_filter=${encodeURIComponent(filter)}`;
+    let page = 1;
+    while (true) {
+      let res;
+      try {
+        res = await fetchPage<HeartlandTicket>(secret, ticketPath, page, 200);
+      } catch (err) {
+        console.warn(
+          `Recency sync: window ${win.from}→${win.to} page ${page} failed: ${(err as Error).message}`
+        );
+        break;
+      }
+      for (const t of res.results) {
+        // Filter client-side for completed (Heartland's tickets endpoint
+        // doesn't accept those as filters — known bug).
+        if (t['voided?']) continue;
+        if (!t['completed?']) continue;
+        const cid = t.customer_id;
+        if (!cid) continue;
+        const d = t.local_completed_at;
+        if (!d) continue;
+        const prev = lastByCustomer.get(cid);
+        if (!prev || d > prev) lastByCustomer.set(cid, d);
+        ticketsScanned++;
+      }
+      if (page >= (res.pages ?? 1)) break;
+      page++;
+      if (page > 200) break; // safety cap per window
+    }
+    console.log(
+      `Recency window ${win.from}→${win.to}: scanned ${ticketsScanned} so far, ${lastByCustomer.size} distinct customers`
+    );
+  }
+
+  // ── 2. Stamp customers in DDB ──────────────────────────────────────
+  let customersStamped = 0;
+  const ids = [...lastByCustomer.entries()];
+  // Run updates in batches of 25 to bound concurrency.
+  const { UpdateCommand } = await import('@aws-sdk/lib-dynamodb');
+  for (let i = 0; i < ids.length; i += 25) {
+    const batch = ids.slice(i, i + 25);
+    await Promise.all(
+      batch.map(async ([cid, date]) => {
+        try {
+          await docClient.send(
+            new UpdateCommand({
+              TableName: TABLE_NAME,
+              Key: { userId: OWNER_USER_ID, sk: `POS#CUSTOMER#${cid}` },
+              UpdateExpression:
+                'SET lastPurchaseAt = :d, lastPurchaseStampedAt = :now',
+              ExpressionAttributeValues: {
+                ':d': date,
+                ':now': new Date().toISOString(),
+              },
+              // Don't fail if the customer row doesn't exist — could
+              // happen if the customer sync is stale.
+              ConditionExpression: 'attribute_exists(sk)',
+            })
+          );
+          customersStamped++;
+        } catch (err) {
+          // ConditionalCheckFailedException = customer row doesn't exist
+          // (probably new customer not yet pulled). Silent skip.
+          const e = err as { name?: string };
+          if (e.name !== 'ConditionalCheckFailedException') {
+            console.warn(
+              `recency stamp failed for ${cid}:`,
+              (err as Error).message
+            );
+          }
+        }
+      })
+    );
+  }
+
+  // ── 3. Compute dormancy buckets and patch stats row ───────────────
+  // We scan only the canonical customer rows once and count.
+  const cutoff6m = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 6);
+    return d.toISOString().slice(0, 10);
+  })();
+  const cutoff12m = (() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 12);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  let dormant6m = 0;
+  let dormant12m = 0;
+  let exclusiveStartKey: Record<string, unknown> | undefined;
+  while (true) {
+    const res = await docClient.send(
+      new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'userId = :u AND begins_with(sk, :p)',
+        ExpressionAttributeValues: {
+          ':u': OWNER_USER_ID,
+          ':p': 'POS#CUSTOMER#',
+        },
+        ProjectionExpression: 'lastPurchaseAt, email',
+        ExclusiveStartKey: exclusiveStartKey,
+      })
+    );
+    for (const item of res.Items ?? []) {
+      const last = item['lastPurchaseAt'] as string | undefined;
+      const email = String(item['email'] ?? '').trim();
+      // Only count customers WITH email — that's the campaign-relevant
+      // population. Customers without email can't be reached either way.
+      if (!email) continue;
+      const lastDate = last ? last.slice(0, 10) : null;
+      if (!lastDate || lastDate < cutoff12m) {
+        dormant12m++;
+      }
+      if (!lastDate || lastDate < cutoff6m) {
+        dormant6m++;
+      }
+    }
+    if (!res.LastEvaluatedKey) break;
+    exclusiveStartKey = res.LastEvaluatedKey;
+  }
+
+  // Patch the stats row with dormancy + cutoff dates so the UI can show.
+  await docClient.send(
+    new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { userId: OWNER_USER_ID, sk: 'POS#CUSTOMER_STATS' },
+      UpdateExpression:
+        'SET dormant6m = :d6, dormant12m = :d12, dormancyCutoff6m = :c6, dormancyCutoff12m = :c12, recencyUpdatedAt = :now',
+      ExpressionAttributeValues: {
+        ':d6': dormant6m,
+        ':d12': dormant12m,
+        ':c6': cutoff6m,
+        ':c12': cutoff12m,
+        ':now': new Date().toISOString(),
+      },
+    })
+  );
+
+  return { ticketsScanned, customersStamped, dormant6m, dormant12m };
+}
+
+
 
 export const handler = async (event?: ScheduledEvent | { trigger?: string }) => {
   const start = Date.now();
@@ -756,9 +1166,22 @@ export const handler = async (event?: ScheduledEvent | { trigger?: string }) => 
       ? 'schedule'
       : (event as { trigger?: string })?.trigger || 'manual';
 
-  console.log(`Sync start: trigger=${trigger} locationId=${FLOWER_MOUND_LOCATION_ID}`);
+  // "today-only" fast path — invoked synchronously from the FS Assistant
+  // when a user asks about today's sales / now / current data. Only the
+  // payments+tickets section runs (rolling 35-day window in
+  // syncPaymentsAndTickets is already narrow; the other sections are
+  // skipped to keep total wall-clock under ~10s).
+  const todayOnly = trigger === 'today-only';
+  // "customers-only" mode — invoked from the Campaign card's Refresh
+  // button. Only the /customers pull runs (~25-40s for 28k customers).
+  const customersOnly = trigger === 'customers-only';
+
+  console.log(
+    `Sync start: trigger=${trigger} todayOnly=${todayOnly} locationId=${FLOWER_MOUND_LOCATION_ID}`
+  );
   const summary: Record<string, unknown> = {
     trigger,
+    todayOnly,
     startedAt: new Date(start).toISOString(),
     locationId: FLOWER_MOUND_LOCATION_ID,
   };
@@ -772,14 +1195,27 @@ export const handler = async (event?: ScheduledEvent | { trigger?: string }) => 
     return summary;
   }
 
-  // Run each sync section independently so partial failures don't block others
-  for (const [name, fn] of [
-    ['payments', () => syncPaymentsAndTickets(secret)],
-    ['inventory', () => syncInventory(secret)],
-    ['purchasing', () => syncPurchasing(secret)],
-    ['reporting', () => syncReporting(secret)],
-    ['staff', () => syncStaffAndPaymentTypes(secret)],
-  ] as Array<[string, () => Promise<unknown>]>) {
+  // Run each sync section independently so partial failures don't block others.
+  // Today-only mode runs only payments/tickets — that's the data backing
+  // get_sales_summary's "today" bucket. Customers-only mode runs only
+  // the /customers pull (admin-triggered from the Campaign Refresh button).
+  const sections: Array<[string, () => Promise<unknown>]> = todayOnly
+    ? [['payments', () => syncPaymentsAndTickets(secret)]]
+    : customersOnly
+      ? [
+          ['customers', () => syncCustomers(secret)],
+          ['customerRecency', () => syncCustomerRecency(secret)],
+        ]
+      : [
+          ['payments', () => syncPaymentsAndTickets(secret)],
+          ['inventory', () => syncInventory(secret)],
+          ['purchasing', () => syncPurchasing(secret)],
+          ['reporting', () => syncReporting(secret)],
+          ['staff', () => syncStaffAndPaymentTypes(secret)],
+          ['customers', () => syncCustomers(secret)],
+          ['customerRecency', () => syncCustomerRecency(secret)],
+        ];
+  for (const [name, fn] of sections) {
     try {
       const t0 = Date.now();
       const result = await fn();
@@ -793,7 +1229,20 @@ export const handler = async (event?: ScheduledEvent | { trigger?: string }) => 
   const durationMs = Date.now() - start;
   summary['durationMs'] = durationMs;
   summary['completedAt'] = new Date().toISOString();
-  summary['status'] = 'ok';
+  // Mark the overall status based on whether any section reported an
+  // error. Without this the UI's "Synced N min ago" badge stays green
+  // even when Heartland's API was returning 500s for a critical
+  // section like payments — which leaves the dashboard showing stale
+  // numbers without warning the user.
+  const anyError = sections.some(([name]) => {
+    const s = summary[name] as { error?: unknown } | undefined;
+    return s && typeof s === 'object' && 'error' in s && s.error;
+  });
+  const allError = sections.every(([name]) => {
+    const s = summary[name] as { error?: unknown } | undefined;
+    return s && typeof s === 'object' && 'error' in s && s.error;
+  });
+  summary['status'] = allError ? 'error' : anyError ? 'partial' : 'ok';
 
   await writeSyncStatus(summary);
   console.log(`Sync complete in ${durationMs}ms:`, JSON.stringify(summary));

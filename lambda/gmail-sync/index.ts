@@ -44,7 +44,7 @@ import {
   SendMessageBatchCommand,
   type SendMessageBatchRequestEntry,
 } from '@aws-sdk/client-sqs';
-import { searchEmails, getMessage } from '../gmail/client';
+import { searchEmails, getMessage, extractAttachments, ALL_GMAIL_ACCOUNTS, type GmailClientInstance } from '../gmail/client';
 
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -265,12 +265,15 @@ interface CachedMessage {
   vendorBrand: string | null;
   kind: 'invoice' | 'vendor' | 'customer' | 'corporate' | 'franchise' | 'internal' | null;
   hasAttachment: boolean;
+  attachments: Array<{ filename: string; mimeType: string; size: number; attachmentId: string }>;
   ttl: number;
+  /** Which Gmail account this message came from. 'flowermound' = primary. */
+  sourceAccount?: string;
 }
 
 async function writeMessage(msg: CachedMessage): Promise<void> {
   const items: Array<{ PutRequest: { Item: Record<string, unknown> } }> = [];
-  const base = {
+  const base: Record<string, unknown> = {
     userId: OWNER_USER_ID,
     ttl: msg.ttl,
     id: msg.id,
@@ -284,6 +287,12 @@ async function writeMessage(msg: CachedMessage): Promise<void> {
     vendorBrand: msg.vendorBrand,
     kind: msg.kind,
     hasAttachment: msg.hasAttachment,
+    attachments: msg.attachments,
+    // Tag with source account so analysis can show which inbox each item came from.
+    // Omit for primary account to keep backward compat with existing rows.
+    ...(msg.sourceAccount && msg.sourceAccount !== 'flowermound'
+      ? { sourceAccount: msg.sourceAccount }
+      : {}),
   };
 
   // Canonical row — only place the full body lives
@@ -459,6 +468,19 @@ async function listMessagesPage(query: string, pageToken?: string): Promise<Gmai
   return (await res.json()) as GmailListPage;
 }
 
+async function listMessagesPageWithClient(
+  client: GmailClientInstance,
+  query: string,
+  pageToken?: string
+): Promise<GmailListPage> {
+  // GmailClientInstance.searchEmails doesn't expose pagination, so we
+  // use it for the first page only. For multi-page syncs the primary
+  // account path still uses the raw fetch. This is fine for the Nancy
+  // account which has ~35 messages total.
+  const messages = await client.searchEmails(query, MAX_PER_PAGE);
+  return { messages, resultSizeEstimate: messages.length };
+}
+
 // ── Date helpers ─────────────────────────────────────────────────────
 
 function todayStr(): string {
@@ -488,7 +510,12 @@ interface SyncResult {
   truncated: boolean;
 }
 
-async function runSync(query: string, mode: string): Promise<SyncResult> {
+async function runSync(
+  query: string,
+  mode: string,
+  client?: GmailClientInstance,
+  accountKey = 'flowermound'
+): Promise<SyncResult> {
   const t0 = Date.now();
   let pageToken: string | undefined;
   let seen = 0;
@@ -496,23 +523,26 @@ async function runSync(query: string, mode: string): Promise<SyncResult> {
   let skipped = 0;
   let truncated = false;
 
+  // Use provided client or fall back to the legacy module-level functions
+  const doSearch = client
+    ? (q: string, tok?: string) => listMessagesPageWithClient(client, q, tok)
+    : (q: string, tok?: string) => listMessagesPage(q, tok);
+  const doGetMessage = client
+    ? (id: string) => client.getMessage(id, BODY_CAP_BYTES)
+    : (id: string) => getMessage(id, BODY_CAP_BYTES);
+
   while (true) {
-    const page = await listMessagesPage(query, pageToken);
-    const ids = (page.messages ?? []).map((m) => m.id);
+    const page = await doSearch(query, pageToken);
+    const ids = (page.messages ?? []).map((m: { id: string }) => m.id);
     seen += ids.length;
 
-    // Look up each id (skip ones we already have)
     for (const id of ids) {
       if (written + skipped >= HARD_PER_RUN_CAP) {
         truncated = true;
         break;
       }
       try {
-        // Cheap probe: does the canonical row exist? If yes, skip.
-        // We don't know the date yet, so probe by listing a 1-element
-        // begins_with on the id suffix is overkill. Simpler: fetch the
-        // message, derive the dateOnly, then GetItem the canonical key.
-        const detailed = await getMessage(id, BODY_CAP_BYTES);
+        const detailed = await doGetMessage(id);
         const dateOnly = isoDateOnly(detailed.date);
         const existing = await docClient.send(
           new GetCommand({
@@ -548,19 +578,21 @@ async function runSync(query: string, mode: string): Promise<SyncResult> {
           bodyTruncated: detailed.truncated,
           vendorBrand,
           kind,
-          hasAttachment: false, // Not extracted yet — could add later via parts walk
+          hasAttachment: detailed.attachments.length > 0,
+          attachments: detailed.attachments,
           ttl: ttlEpochSecs(detailed.date),
+          sourceAccount: accountKey,
         };
 
         await writeMessage(cached);
         written++;
       } catch (err) {
-        console.warn(`Failed to sync ${id}: ${(err as Error).message}`);
+        console.warn(`Failed to sync ${id} (${accountKey}): ${(err as Error).message}`);
       }
     }
 
     if (truncated) break;
-    pageToken = page.nextPageToken;
+    pageToken = (page as { nextPageToken?: string }).nextPageToken;
     if (!pageToken) break;
   }
 
@@ -581,7 +613,30 @@ async function backfill(months: number): Promise<SyncResult> {
   const after = dateAgoStr(months * 30);
   const before = todayStr();
   const query = `after:${gmailDate(after)} before:${gmailDate(before)} -category:promotions -category:social`;
-  const result = await runSync(query, 'backfill');
+
+  // Run primary account first, then all secondary accounts.
+  const primary = await runSync(query, 'backfill');
+  let totalSeen = primary.messagesSeen;
+  let totalWritten = primary.messagesWritten;
+  let totalSkipped = primary.messagesSkipped;
+
+  for (const { client, accountKey } of ALL_GMAIL_ACCOUNTS.slice(1)) {
+    try {
+      const r = await runSync(query, 'backfill', client, accountKey);
+      totalSeen += r.messagesSeen;
+      totalWritten += r.messagesWritten;
+      totalSkipped += r.messagesSkipped;
+    } catch (err) {
+      console.error(`backfill failed for ${accountKey}:`, (err as Error).message);
+    }
+  }
+
+  const result: SyncResult = {
+    ...primary,
+    messagesSeen: totalSeen,
+    messagesWritten: totalWritten,
+    messagesSkipped: totalSkipped,
+  };
   await saveState({
     lastBackfillStart: after,
     lastBackfillEnd: before,
@@ -594,21 +649,40 @@ async function backfill(months: number): Promise<SyncResult> {
 }
 
 async function incremental(): Promise<SyncResult> {
-  // Pull the last 2 days to be safe across timezone seams + late-arriving mail
   const after = dateAgoStr(2);
   const query = `after:${gmailDate(after)} -category:promotions -category:social`;
-  const result = await runSync(query, 'incremental');
+
+  const primary = await runSync(query, 'incremental');
+  let totalWritten = primary.messagesWritten;
+
+  for (const { client, accountKey } of ALL_GMAIL_ACCOUNTS.slice(1)) {
+    try {
+      const r = await runSync(query, 'incremental', client, accountKey);
+      totalWritten += r.messagesWritten;
+    } catch (err) {
+      console.error(`incremental failed for ${accountKey}:`, (err as Error).message);
+    }
+  }
+
   await saveState({
-    lastIncrementalAdded: result.messagesWritten,
-    message: `Incremental sync added ${result.messagesWritten} message(s).`,
+    lastIncrementalAdded: totalWritten,
+    message: `Incremental sync added ${totalWritten} message(s) across all accounts.`,
   });
-  return result;
+  return { ...primary, messagesWritten: totalWritten };
 }
 
 async function rangeSync(after: string, before: string): Promise<SyncResult> {
   const query = `after:${gmailDate(after)} before:${gmailDate(before)} -category:promotions -category:social`;
-  const result = await runSync(query, 'range');
-  return result;
+  const primary = await runSync(query, 'range');
+
+  for (const { client, accountKey } of ALL_GMAIL_ACCOUNTS.slice(1)) {
+    try {
+      await runSync(query, 'range', client, accountKey);
+    } catch (err) {
+      console.error(`rangeSync failed for ${accountKey}:`, (err as Error).message);
+    }
+  }
+  return primary;
 }
 
 // ── Reclassify ───────────────────────────────────────────────────────
@@ -670,6 +744,7 @@ async function reclassify(): Promise<SyncResult> {
         vendorBrand: newVendor,
         kind: newKind,
         hasAttachment: !!item['hasAttachment'],
+        attachments: (item['attachments'] as Array<{ filename: string; mimeType: string; size: number; attachmentId: string }> | undefined) ?? [],
         ttl: Number(item['ttl']) || ttlEpochSecs(String(item['date'])),
       };
 

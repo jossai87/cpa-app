@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { Fragment } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -23,10 +23,13 @@ import {
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../lib/api';
 import { useAdmin } from '../lib/admin';
+import { useAuth } from '../lib/auth';
 import Spinner from '../components/Spinner';
 import CentralTimeBadge from '../components/CentralTimeBadge';
+// SalesChat removed at FS Assistant cutover (Task 18.2). Component file
+// kept in src/components/SalesChat.tsx for the one-release rollback
+// window per Req 10.2 — delete after the 14-day soak (Phase 5).
 import { downloadCsvSections, stampedName, csvNum, type CsvSection } from '../lib/csv';
-import SalesChat from '../components/SalesChat';
 import VendorHealthCard from '../components/VendorHealthCard';
 import DailyHighlightsCard from '../components/DailyHighlightsCard';
 import OrderRow from '../components/OrderRow';
@@ -667,14 +670,31 @@ type Tab = 'overview' | 'analytics' | 'inventory' | 'vendors' | 'staff' | 'purch
 
 // ── Main page ─────────────────────────────────────────────────────────
 
-export default function SalesRevenue() {
-  const [tab, setTab] = useState<Tab>('overview');
+export interface SalesRevenueProps {
+  /**
+   * If provided, the component opens directly to this tab and skips its
+   * default behaviour of starting on "overview". Used by `OwnerHome`'s
+   * Vendor Directory modal so the embedded view lands on Vendors.
+   */
+  initialTab?: Tab;
+  /**
+   * Hide the page chrome (back link, refresh, download, sync bar)
+   * when rendered inside another container — e.g. the OwnerHome
+   * vendor-directory modal which provides its own close button.
+   */
+  embedded?: boolean;
+}
+
+export default function SalesRevenue({ initialTab, embedded = false }: SalesRevenueProps = {}) {
+  const [tab, setTab] = useState<Tab>(initialTab ?? 'overview');
+  const [actionDrawerOpen, setActionDrawerOpen] = useState(false);
   const { isVisible } = useAdmin();
+  const { user } = useAuth();
   // Memoize per-feature visibility flags so the values are stable across renders
   const showTotalRevenueCard = isVisible('sales.trends.totalRevenue');
   const showAvgTicketCard = isVisible('sales.trends.avgTicket');
   const showReportingTab = isVisible('sales.tab.reporting');
-  const [analyticsDays, setAnalyticsDays] = useState(7);
+  // analyticsDays is now derived from trendStart/trendEnd — see below
   const [stockBrandFilter, setStockBrandFilter] = useState('');
 
   // ── Overview date filter ──────────────────────────────────────────
@@ -786,6 +806,25 @@ export default function SalesRevenue() {
   }).format(new Date());
   const [insightsYear, setInsightsYear] = useState<string>(currentYearStr);
 
+  // Trends (analytics) date filter — same preset/date-picker pattern as Overview
+  const [trendPreset, setTrendPreset] = useState<DatePreset>('last_week');
+  const [trendStart, setTrendStart] = useState<string>(() => presetToDates('last_week').start);
+  const [trendEnd, setTrendEnd] = useState<string>(() => presetToDates('last_week').end);
+
+  function applyTrendPreset(preset: DatePreset) {
+    setTrendPreset(preset);
+    const { start, end } = presetToDates(preset);
+    setTrendStart(start);
+    setTrendEnd(end);
+  }
+
+  // Derive analyticsDays from the trend date range for the API call
+  const analyticsDays = (() => {
+    if (!trendStart || !trendEnd) return 7;
+    const ms = new Date(trendEnd + 'T12:00:00').getTime() - new Date(trendStart + 'T12:00:00').getTime();
+    return Math.max(1, Math.round(ms / 86400000) + 1);
+  })();
+
   const queryClient = useQueryClient();
 
   const dashQ = useQuery<DashboardResponse>({
@@ -825,7 +864,7 @@ export default function SalesRevenue() {
   });
 
   const analyticsQ = useQuery<AnalyticsResponse>({
-    queryKey: ['pos', 'analytics', analyticsDays],
+    queryKey: ['pos', 'analytics', analyticsDays, trendStart, trendEnd],
     queryFn: () => api.get<AnalyticsResponse>(`/pos/analytics?days=${analyticsDays}`).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
     enabled: tab === 'analytics' || tab === 'overview' || tab === 'purchasing',
@@ -893,6 +932,14 @@ export default function SalesRevenue() {
     repTitle?: string;
     /** Vendor-side account / customer number for THIS store. */
     account?: string;
+    /** B2B portal URL used for placing orders / managing the account. */
+    b2bUrl?: string;
+    /** Username for the vendor's B2B login portal. */
+    b2bUsername?: string;
+    /** Password for the vendor's B2B login portal. Stored in plain text in
+     * DDB — same trust boundary as the rest of the vendor settings since
+     * the table only holds owner-scoped data. */
+    b2bPassword?: string;
   }
   interface VendorContact {
     id: string;
@@ -901,13 +948,36 @@ export default function SalesRevenue() {
     phone?: string;
     email?: string;
   }
+  interface VendorReply {
+    id: string;
+    text: string;
+    createdAt: string;
+    editedAt?: string;
+  }
+
+  interface VendorComment {
+    id: string;
+    text: string;
+    createdAt: string; // human-readable CT string
+    editedAt?: string; // set when the comment has been edited
+    replies?: VendorReply[];
+    archived?: boolean;
+    archivedAt?: string;
+    /** Epoch seconds — comment auto-removed from archive after this date */
+    archiveExpiresAt?: number;
+  }
+
   interface VendorSettingsResponse {
     activeAccounts: string[];
     discontinuedVendors: string[];
+    deletedVendors: string[];
     contactedVendors: string[];
-    contactNotes: Record<string, string>;
+    contactNotes: Record<string, string | { text: string; updatedAt: string }>;
+    vendorComments: Record<string, VendorComment[]>;
     vendorOverrides: Record<string, VendorOverride>;
     customContacts: Record<string, VendorContact[]>;
+    /** Manually-created vendor cards (not from Heartland POS) */
+    customVendors?: Array<{ id: string; name: string }>;
     updatedAt: string | null;
   }
 
@@ -925,76 +995,51 @@ export default function SalesRevenue() {
     },
   });
 
-  // ── Vendor account-number discovery (Gmail-cache scan via Bedrock) ──
-  interface DiscoveredAccount {
-    vendorId: number;
-    vendorName: string;
-    accountNumber: string;
-    confidence: 'high' | 'medium' | 'low';
-    evidence: string;
-    sourceMessageIds: string[];
-  }
-  interface DiscoveryResult {
-    applied: DiscoveredAccount[];
-    suggestions: DiscoveredAccount[];
-    skipped: Array<{ vendorId: number; vendorName: string; reason: string }>;
-    notFound: Array<{ vendorId: number; vendorName: string }>;
-    totalScanned: number;
-  }
-  const [discoveryResult, setDiscoveryResult] = useState<DiscoveryResult | null>(null);
-  const accountDiscoveryMutation = useMutation({
-    mutationFn: async (
-      vendors: Array<{ id: number; name: string }>
-    ): Promise<DiscoveryResult> => {
-      // Pass the existing-account map so the backend skips anything the
-      // user already filled in manually.
-      const existingAccounts: Record<string, string> = {};
-      for (const [id, ov] of Object.entries(vendorOverrides)) {
-        if (ov.account) existingAccounts[id] = ov.account;
-      }
-      const r = await api.post<DiscoveryResult>(
-        '/gmail/discover-vendor-accounts',
-        { vendors, existingAccounts }
-      );
-      return r.data;
-    },
-    onSuccess: (result) => {
-      setDiscoveryResult(result);
-      // Auto-apply HIGH confidence matches into the overrides.
-      if (result.applied.length > 0) {
-        const next = { ...vendorOverrides };
-        for (const a of result.applied) {
-          next[a.vendorId] = { ...(next[a.vendorId] ?? {}), account: a.accountNumber };
-        }
-        vendorSettingsMutation.mutate({
-          vendorOverrides: Object.fromEntries(
-            Object.entries(next).map(([k, v]) => [String(k), v])
-          ),
-        } as Partial<VendorSettingsResponse>);
-      }
-    },
-  });
-
-  function applySuggestion(vendorId: number, accountNumber: string) {
-    const next = { ...vendorOverrides };
-    next[vendorId] = { ...(next[vendorId] ?? {}), account: accountNumber };
-    vendorSettingsMutation.mutate({
-      vendorOverrides: Object.fromEntries(
-        Object.entries(next).map(([k, v]) => [String(k), v])
-      ),
-    } as Partial<VendorSettingsResponse>);
-    setDiscoveryResult((prev) =>
-      prev
-        ? { ...prev, suggestions: prev.suggestions.filter((s) => s.vendorId !== vendorId) }
-        : prev
-    );
-  }
+  // Vendor account-number discovery removed — feature deprecated.
 
   // Derive local state from the query result (falls back to empty while loading)
   const activeAccounts = new Set<string>(vendorSettingsQ.data?.activeAccounts ?? []);
   const discontinuedVendors = new Set<string>(vendorSettingsQ.data?.discontinuedVendors ?? []);
+  const deletedVendors = new Set<string>(vendorSettingsQ.data?.deletedVendors ?? []);
   const contactedVendors = new Set<string>(vendorSettingsQ.data?.contactedVendors ?? []);
-  const contactNotes: Record<string, string> = vendorSettingsQ.data?.contactNotes ?? {};
+  const contactNotes: Record<string, string | { text: string; updatedAt: string }> = vendorSettingsQ.data?.contactNotes ?? {};
+  // Merge vendorComments with any legacy contactNotes that haven't been migrated yet.
+  // contactNotes entries are shown as the first comment on a card if no vendorComments
+  // exist for that key yet — this preserves all existing notes after the migration.
+  // Also drop archived comments whose 365-day TTL has expired.
+  const vendorComments: Record<string, VendorComment[]> = (() => {
+    const base: Record<string, VendorComment[]> = { ...(vendorSettingsQ.data?.vendorComments ?? {}) };
+    const nowSecs = Math.floor(Date.now() / 1000);
+    // Drop expired archives
+    for (const key of Object.keys(base)) {
+      base[key] = base[key]!.filter((c) => {
+        if (c.archived && c.archiveExpiresAt && c.archiveExpiresAt < nowSecs) return false;
+        return true;
+      });
+      if (base[key]!.length === 0) delete base[key];
+    }
+    for (const [key, raw] of Object.entries(contactNotes)) {
+      // Only migrate if there are no new-style comments for this vendor yet
+      if (base[key] && base[key]!.length > 0) continue;
+      const text = typeof raw === 'object' && raw !== null ? raw.text : raw;
+      const updatedAt = typeof raw === 'object' && raw !== null ? raw.updatedAt : null;
+      if (!text?.trim()) continue;
+      base[key] = [{
+        id: `legacy-${key}`,
+        text: text.trim(),
+        createdAt: updatedAt ?? 'before May 2026',
+      }];
+    }
+    return base;
+  })();
+
+  // Helpers to split active vs archived for the UI
+  function getActiveComments(key: string): VendorComment[] {
+    return (vendorComments[key] ?? []).filter((c) => !c.archived);
+  }
+  function getArchivedComments(key: string): VendorComment[] {
+    return (vendorComments[key] ?? []).filter((c) => c.archived);
+  }
   // vendorOverrides keys come back as strings from JSON; cast to number-keyed for compat
   const vendorOverrides: Record<number, VendorOverride> = Object.fromEntries(
     Object.entries(vendorSettingsQ.data?.vendorOverrides ?? {}).map(([k, v]) => [Number(k), v])
@@ -1002,22 +1047,57 @@ export default function SalesRevenue() {
   const customContacts: Record<number, VendorContact[]> = Object.fromEntries(
     Object.entries(vendorSettingsQ.data?.customContacts ?? {}).map(([k, v]) => [Number(k), v])
   );
+  const customVendors: Array<{ id: string; name: string }> = vendorSettingsQ.data?.customVendors ?? [];
 
   // Helper: build the full settings payload merging a partial change over current data
   function buildSettingsUpdate(patch: Partial<VendorSettingsResponse>): Partial<VendorSettingsResponse> {
     return {
       activeAccounts: [...activeAccounts],
       discontinuedVendors: [...discontinuedVendors],
+      deletedVendors: [...deletedVendors],
       contactedVendors: [...contactedVendors],
       contactNotes,
+      vendorComments,
       vendorOverrides: Object.fromEntries(Object.entries(vendorOverrides).map(([k, v]) => [String(k), v])),
       customContacts: Object.fromEntries(Object.entries(customContacts).map(([k, v]) => [String(k), v])),
+      customVendors,
       ...patch,
     };
   }
 
   const [editingVendorCard, setEditingVendorCard] = useState<number | null>(null);
   const [vendorCardDraft, setVendorCardDraft] = useState<VendorOverride>({});
+  // Per-vendor comment draft — keyed by vendor key string
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  // Inline comment editing — key is `${vendorKey}:${commentId}`
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
+  // Expanded comments — key is `${vendorKey}:${commentId}`
+  const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
+  // Reply drafts — keyed `${vendorKey}:${commentId}`. Presence in this map = reply input is open.
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  // Archive viewer modal — vendor key currently being viewed (null = closed)
+  const [archiveViewerKey, setArchiveViewerKey] = useState<string | null>(null);
+  const [archiveViewerName, setArchiveViewerName] = useState<string>('');
+
+  const COMMENT_TRUNCATE_CHARS = 120;
+
+  function isCommentLong(text: string) { return text.length > COMMENT_TRUNCATE_CHARS; }
+  function truncateComment(text: string) {
+    // Strip newlines in the preview so multi-line comments don't blow up the card
+    const flat = text.replace(/\n+/g, ' ').trim();
+    return flat.slice(0, COMMENT_TRUNCATE_CHARS).trimEnd();
+  }
+  function toggleCommentExpand(compositeKey: string) {
+    setExpandedComments((prev) => {
+      const next = new Set(prev);
+      if (next.has(compositeKey)) next.delete(compositeKey); else next.add(compositeKey);
+      return next;
+    });
+  }
+  // New vendor modal
+  const [showNewVendorModal, setShowNewVendorModal] = useState(false);
+  const [newVendorDraft, setNewVendorDraft] = useState<VendorOverride & { name: string }>({ name: '' });
   const [vendorSearch, setVendorSearch] = useState<string>('');
 
   function handleVendorAccountToggle(key: string, vendorName: string, checked: boolean) {
@@ -1056,16 +1136,187 @@ export default function SalesRevenue() {
     }
   }
 
+  function handleDeleteVendor(key: string, vendorName: string) {
+    if (!window.confirm(`Remove "${vendorName}" from your vendor directory? This only hides it from your view — it can be restored by clearing the "deleted" flag.`)) return;
+    const next = new Set(deletedVendors);
+    next.add(key);
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ deletedVendors: [...next] }));
+  }
+
   function handleContactedToggle(key: string, checked: boolean) {
     const next = new Set(contactedVendors);
     if (checked) next.add(key); else next.delete(key);
     vendorSettingsMutation.mutate(buildSettingsUpdate({ contactedVendors: [...next] }));
   }
 
-  function handleContactNoteChange(key: string, note: string) {
-    const next = { ...contactNotes, [key]: note };
-    if (!note.trim()) delete next[key];
-    vendorSettingsMutation.mutate(buildSettingsUpdate({ contactNotes: next }));
+  function handleAddComment(key: string, text: string, vendorName: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const existing = vendorComments[key] ?? [];
+    const newComment: VendorComment = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      text: trimmed,
+      createdAt: new Date().toLocaleString('en-US', {
+        timeZone: 'America/Chicago',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+      }),
+    };
+    const next = { ...vendorComments, [key]: [...existing, newComment] };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+
+    // Fire-and-forget email notification — same pattern as replies so
+    // the owner gets a record of every vendor-card touchpoint without
+    // having to scrape the UI. Don't block the UX on this.
+    void api.post('/pos/vendor-comment-add', {
+      vendorName: vendorName.trim() || 'Unknown vendor',
+      storeName: 'Foot Solutions Flower Mound',
+      authorEmail: user?.email ?? 'unknown',
+      comment: { text: trimmed, createdAt: newComment.createdAt },
+    }).catch((err) => {
+      console.warn('Comment-add notification failed:', err);
+    });
+  }
+
+  function handleDeleteComment(key: string, commentId: string) {
+    const existing = vendorComments[key] ?? [];
+    const updated = existing.filter((c) => c.id !== commentId);
+    const next = { ...vendorComments };
+    if (updated.length === 0) delete next[key]; else next[key] = updated;
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+  }
+
+  function handleEditComment(key: string, commentId: string, newText: string) {
+    const trimmed = newText.trim();
+    if (!trimmed) return;
+    const existing = vendorComments[key] ?? [];
+    const updated = existing.map((c) =>
+      c.id === commentId
+        ? {
+            ...c,
+            text: trimmed,
+            editedAt: new Date().toLocaleString('en-US', {
+              timeZone: 'America/Chicago',
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true,
+            }),
+          }
+        : c
+    );
+    const next = { ...vendorComments, [key]: updated };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+    setEditingCommentId(null);
+    setEditingCommentText('');
+  }
+
+  function nowCT(): string {
+    return new Date().toLocaleString('en-US', {
+      timeZone: 'America/Chicago',
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+  }
+
+  function handleAddReply(key: string, parentCommentId: string, replyText: string, vendorName: string) {
+    const trimmed = replyText.trim();
+    if (!trimmed) return;
+    const existing = vendorComments[key] ?? [];
+    const parent = existing.find((c) => c.id === parentCommentId);
+    if (!parent) return;
+    const reply: VendorReply = {
+      id: `r-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      text: trimmed,
+      createdAt: nowCT(),
+    };
+    const updated = existing.map((c) =>
+      c.id === parentCommentId
+        ? { ...c, replies: [...(c.replies ?? []), reply] }
+        : c
+    );
+    const next = { ...vendorComments, [key]: updated };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+
+    // Clear the reply draft
+    setReplyDrafts((prev) => {
+      const n = { ...prev };
+      delete n[`${key}:${parentCommentId}`];
+      return n;
+    });
+
+    // Fire-and-forget email notification (don't block UX on it)
+    void api.post('/pos/vendor-comment-reply', {
+      vendorName,
+      storeName: 'Foot Solutions Flower Mound',
+      authorEmail: user?.email ?? 'unknown',
+      originalComment: { text: parent.text, createdAt: parent.createdAt },
+      reply: { text: trimmed, createdAt: reply.createdAt },
+    }).catch((err) => {
+      console.warn('Reply notification failed:', err);
+    });
+  }
+
+  function handleDeleteReply(key: string, parentCommentId: string, replyId: string) {
+    const existing = vendorComments[key] ?? [];
+    const updated = existing.map((c) =>
+      c.id === parentCommentId
+        ? { ...c, replies: (c.replies ?? []).filter((r) => r.id !== replyId) }
+        : c
+    );
+    const next = { ...vendorComments, [key]: updated };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+  }
+
+  function handleArchiveComment(key: string, commentId: string) {
+    const existing = vendorComments[key] ?? [];
+    const ttlSecs = Math.floor(Date.now() / 1000) + 365 * 24 * 3600; // 365 days
+    const updated = existing.map((c) =>
+      c.id === commentId
+        ? { ...c, archived: true, archivedAt: nowCT(), archiveExpiresAt: ttlSecs }
+        : c
+    );
+    const next = { ...vendorComments, [key]: updated };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+  }
+
+  function handleUnarchiveComment(key: string, commentId: string) {
+    const existing = vendorComments[key] ?? [];
+    const updated = existing.map((c) =>
+      c.id === commentId
+        ? { ...c, archived: false, archivedAt: undefined, archiveExpiresAt: undefined }
+        : c
+    );
+    const next = { ...vendorComments, [key]: updated };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ vendorComments: next }));
+  }
+
+  function handleCreateCustomVendor() {
+    const name = newVendorDraft.name.trim();
+    if (!name) return;
+    const id = `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const { name: _n, ...overrideFields } = newVendorDraft;
+    const nextVendors = [...customVendors, { id, name }];
+    // Store the override fields (phone, email, etc.) under the custom id
+    const nextOverrides = { ...vendorOverrides, [id as unknown as number]: overrideFields };
+    vendorSettingsMutation.mutate(buildSettingsUpdate({
+      customVendors: nextVendors,
+      vendorOverrides: Object.fromEntries(Object.entries(nextOverrides).map(([k, v]) => [String(k), v])),
+    }));
+    setNewVendorDraft({ name: '' });
+    setShowNewVendorModal(false);
+  }
+
+  function handleDeleteCustomVendor(id: string, name: string) {
+    if (!window.confirm(`Remove "${name}" from your vendor directory?`)) return;
+    const nextVendors = customVendors.filter((v) => v.id !== id);
+    vendorSettingsMutation.mutate(buildSettingsUpdate({ customVendors: nextVendors }));
   }
 
   function saveVendorCard(vendorId: number) {
@@ -1607,6 +1858,7 @@ export default function SalesRevenue() {
 
   return (
     <div className="min-h-screen">
+      {!embedded && (
       <header className="app-header px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center gap-4">
           <Link to="/" className="btn-ghost">
@@ -1641,6 +1893,7 @@ export default function SalesRevenue() {
           </div>
         </div>
       </header>
+      )}
 
       {/* Tab bar */}
       <div className="bg-white border-b border-slate-200">
@@ -1778,15 +2031,8 @@ export default function SalesRevenue() {
 
             {dashQ.data && (
               <>
-                {/* ── Alerts + Notes row ── */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 min-w-0">
-                  {/* Alerts */}
-                  <AlertsPanel alerts={dashQ.data.alerts} onNavigate={setTab} />
-                  {/* Notes */}
-                  <div className="min-w-0 overflow-hidden">
-                    <NotesPanel />
-                  </div>
-                </div>
+                {/* ── Alerts row (full width now that Notes moved to side drawer) ── */}
+                <AlertsPanel alerts={dashQ.data.alerts} onNavigate={setTab} />
 
                 {/* ── Inventory Turn Rate — compact overview card ── */}
                 {inventoryQ.data && !inventoryQ.data.notReady && (() => {
@@ -1923,22 +2169,46 @@ export default function SalesRevenue() {
         {/* ── ANALYTICS TAB ── */}
         {tab === 'analytics' && (
           <div className="space-y-6">
-            {/* Period selector */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-600">Period:</span>
-              {[1, 7, 30, 60, 90, 180, 365].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setAnalyticsDays(d)}
-                  className={`px-3 py-1 text-sm rounded-full border transition ${
-                    analyticsDays === d
-                      ? 'bg-blue-600 text-white border-blue-600'
-                      : 'border-slate-300 text-slate-600 hover:bg-slate-100'
-                  }`}
-                >
-                  {d === 365 ? '1 yr' : d === 1 ? '1d' : `${d}d`}
-                </button>
-              ))}
+            {/* Date filter — same pattern as Overview tab */}
+            <div className="bg-white rounded-xl border border-slate-200 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Dates</span>
+                <div className="relative">
+                  <select
+                    value={trendPreset}
+                    onChange={(e) => applyTrendPreset(e.target.value as DatePreset)}
+                    aria-label="Date preset"
+                    className="appearance-none rounded-md border border-slate-300 bg-white pl-2 pr-6 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    {(Object.keys(PRESET_LABELS) as DatePreset[]).map((p) => (
+                      <option key={p} value={p}>{PRESET_LABELS[p]}</option>
+                    ))}
+                  </select>
+                  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+                </div>
+                <input
+                  type="date"
+                  value={trendStart}
+                  onChange={(e) => { setTrendStart(e.target.value); setTrendPreset('custom'); }}
+                  aria-label="Start date"
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <span className="text-slate-400 text-xs">–</span>
+                <input
+                  type="date"
+                  value={trendEnd}
+                  onChange={(e) => { setTrendEnd(e.target.value); setTrendPreset('custom'); }}
+                  aria-label="End date"
+                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                {trendStart && trendEnd && (
+                  <span className="text-[11px] text-slate-400 hidden sm:inline">
+                    {new Date(trendStart + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {' – '}
+                    {new Date(trendEnd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                )}
+              </div>
             </div>
 
             {analyticsQ.isLoading && <LoadingState label="Crunching analytics…" />}
@@ -2497,45 +2767,36 @@ export default function SalesRevenue() {
 
           return (
           <div className="space-y-6">
-            {/* Year selector */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-sm text-slate-600">Period:</span>
-              <button
-                onClick={() => setInsightsYear(currentYearStr)}
-                className={`px-3 py-1 text-sm rounded-full border transition ${
-                  insightsYear === currentYearStr
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'border-slate-300 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                {currentYearStr} (YTD)
-              </button>
-              {availableYears
-                .filter((y) => String(y) !== currentYearStr)
-                .map((y) => (
-                  <button
-                    key={y}
-                    onClick={() => setInsightsYear(String(y))}
-                    className={`px-3 py-1 text-sm rounded-full border transition ${
-                      insightsYear === String(y)
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'border-slate-300 text-slate-600 hover:bg-slate-100'
-                    }`}
+            {/* Year / period selector — dropdown style matching Overview */}
+            <div className="bg-white rounded-xl border border-slate-200 px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Period</span>
+                <div className="relative">
+                  <select
+                    value={insightsYear}
+                    onChange={(e) => setInsightsYear(e.target.value)}
+                    aria-label="Insights period"
+                    className="appearance-none rounded-md border border-slate-300 bg-white pl-2 pr-6 py-1 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                   >
-                    {y}
-                  </button>
-                ))}
-              <button
-                onClick={() => setInsightsYear('all')}
-                className={`px-3 py-1 text-sm rounded-full border transition ${
-                  insightsYear === 'all'
-                    ? 'bg-blue-600 text-white border-blue-600'
-                    : 'border-slate-300 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                All available
-              </button>
-              <span className="text-[11px] text-slate-400 ml-auto">All times Central (Flower Mound, TX)</span>
+                    <option value={currentYearStr}>{currentYearStr} (YTD)</option>
+                    {availableYears
+                      .filter((y) => String(y) !== currentYearStr)
+                      .map((y) => (
+                        <option key={y} value={String(y)}>{y}</option>
+                      ))}
+                    <option value="all">All available years</option>
+                  </select>
+                  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs">▾</span>
+                </div>
+                {d?.fromDate && d?.toDate && (
+                  <span className="text-[11px] text-slate-400 hidden sm:inline">
+                    {new Date(d.fromDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                    {' – '}
+                    {new Date(d.toDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                  </span>
+                )}
+                <span className="text-[11px] text-slate-400 ml-auto">All times Central (Flower Mound, TX)</span>
+              </div>
             </div>
 
             {isLoading && <LoadingState label="Loading insights…" />}
@@ -2820,29 +3081,6 @@ export default function SalesRevenue() {
                     <div className="flex items-start justify-between gap-3 mb-1">
                       <h3 className="text-sm font-semibold text-slate-900">Vendor Directory</h3>
                       <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const eligible = [...d.vendors]
-                              .filter((v) => {
-                                const name = (v.name ?? '').toLowerCase();
-                                return name && !name.includes('foot solutions inc') && !name.includes('fs corp');
-                              })
-                              .map((v) => ({ id: v.id, name: v.name ?? '' }));
-                            setDiscoveryResult(null);
-                            accountDiscoveryMutation.mutate(eligible);
-                          }}
-                          disabled={accountDiscoveryMutation.isPending}
-                          title="Scan Gmail cache to find vendor account / customer numbers and auto-apply high-confidence matches"
-                          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition"
-                        >
-                          {accountDiscoveryMutation.isPending ? (
-                            <Spinner size="sm" />
-                          ) : (
-                            <Search className="w-3 h-3" />
-                          )}
-                          {accountDiscoveryMutation.isPending ? 'Scanning…' : 'Find account #s'}
-                        </button>
                         <div className="flex items-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-800 rounded-md px-2.5 py-1">
                           <ShoppingBag className="w-3.5 h-3.5" />
                           <span className="text-xs font-semibold">{(d.vendorCount - 1).toLocaleString()}</span>
@@ -2854,116 +3092,36 @@ export default function SalesRevenue() {
                       Sorted by YTD net sales (highest first). Check the box to mark an active account.
                     </p>
 
-                    {/* Discovery result panel — shown after a scan completes */}
-                    {discoveryResult && (
-                      <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs font-semibold text-slate-700">
-                            Account # scan: scanned {discoveryResult.totalScanned} vendors
-                            {' · '}
-                            <span className="text-emerald-700">
-                              applied {discoveryResult.applied.length}
-                            </span>
-                            {discoveryResult.suggestions.length > 0 && (
-                              <>
-                                {' · '}
-                                <span className="text-amber-700">
-                                  {discoveryResult.suggestions.length} need review
-                                </span>
-                              </>
-                            )}
-                            {' · '}
-                            <span className="text-slate-500">
-                              {discoveryResult.notFound.length} not found
-                            </span>
-                          </p>
+                    {/* Search filter */}
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="relative flex-1">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="search"
+                          value={vendorSearch}
+                          onChange={(e) => setVendorSearch(e.target.value)}
+                          placeholder="Search vendors by name, phone, email, or rep…"
+                          className="w-full text-xs pl-8 pr-8 py-1.5 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          aria-label="Search vendor directory"
+                        />
+                        {vendorSearch && (
                           <button
                             type="button"
-                            onClick={() => setDiscoveryResult(null)}
-                            className="text-slate-400 hover:text-slate-700"
-                            aria-label="Dismiss scan results"
+                            onClick={() => setVendorSearch('')}
+                            aria-label="Clear search"
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
                           >
                             <X className="w-3.5 h-3.5" />
                           </button>
-                        </div>
-                        {discoveryResult.applied.length > 0 && (
-                          <div className="mb-2">
-                            <p className="text-[10px] font-medium text-emerald-700 uppercase tracking-wide mb-1">
-                              Auto-applied (high confidence)
-                            </p>
-                            <ul className="space-y-1">
-                              {discoveryResult.applied.map((a) => (
-                                <li key={a.vendorId} className="text-[11px] text-slate-700">
-                                  <span className="font-semibold">{a.vendorName}</span>
-                                  {' → '}
-                                  <span className="font-mono bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200">
-                                    {a.accountNumber}
-                                  </span>
-                                  {' '}
-                                  <span className="text-slate-400">— {a.evidence}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                        {discoveryResult.suggestions.length > 0 && (
-                          <div>
-                            <p className="text-[10px] font-medium text-amber-700 uppercase tracking-wide mb-1">
-                              Review & accept (medium confidence)
-                            </p>
-                            <ul className="space-y-1">
-                              {discoveryResult.suggestions.map((s) => (
-                                <li key={s.vendorId} className="text-[11px] text-slate-700 flex items-start gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <span className="font-semibold">{s.vendorName}</span>
-                                    {' → '}
-                                    <span className="font-mono bg-amber-50 px-1 py-0.5 rounded border border-amber-200">
-                                      {s.accountNumber}
-                                    </span>
-                                    {' '}
-                                    <span className="text-slate-400">— {s.evidence}</span>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => applySuggestion(s.vendorId, s.accountNumber)}
-                                    className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600 text-white hover:bg-amber-700 transition flex-shrink-0"
-                                  >
-                                    Accept
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
                         )}
                       </div>
-                    )}
-                    {accountDiscoveryMutation.isError && (
-                      <div className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700">
-                        Failed to scan: {(accountDiscoveryMutation.error as Error)?.message ?? 'Unknown error'}
-                      </div>
-                    )}
-                    {/* Search filter — matches name, phone, email, rep info,
-                        and override fields. Case-insensitive substring match. */}
-                    <div className="relative mb-4">
-                      <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        type="search"
-                        value={vendorSearch}
-                        onChange={(e) => setVendorSearch(e.target.value)}
-                        placeholder="Search vendors by name, phone, email, or rep…"
-                        className="w-full text-xs pl-8 pr-8 py-1.5 rounded border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                        aria-label="Search vendor directory"
-                      />
-                      {vendorSearch && (
-                        <button
-                          type="button"
-                          onClick={() => setVendorSearch('')}
-                          aria-label="Clear search"
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => { setNewVendorDraft({ name: '' }); setShowNewVendorModal(true); }}
+                        className="flex-shrink-0 inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded border border-blue-300 text-blue-700 bg-blue-50 hover:bg-blue-100 transition"
+                      >
+                        <span className="text-base leading-none">+</span> Add Vendor
+                      </button>
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                       {(() => {
@@ -2986,12 +3144,27 @@ export default function SalesRevenue() {
                           // Exclude self — "Foot Solutions Inc" is the store itself, not a supplier
                           const name = (v.name ?? '').toLowerCase();
                           return !name.includes('foot solutions inc') && !name.includes('fs corp');
+                        }).filter((v) => {
+                          // Exclude vendor cards the owner has deleted
+                          const key = `vendor-account:${v.id}`;
+                          return !deletedVendors.has(key);
                         }).sort((a, b) => {
+                          const keyA = `vendor-account:${a.id}`;
+                          const keyB = `vendor-account:${b.id}`;
+                          // Status priority: green (active) = 0, yellow (contacted) = 1, default = 2, red (discontinuing) = 3
+                          const statusPriority = (key: string) => {
+                            if (activeAccounts.has(key)) return 0;
+                            if (contactedVendors.has(key)) return 1;
+                            if (discontinuedVendors.has(key)) return 3;
+                            return 2;
+                          };
+                          const pa = statusPriority(keyA);
+                          const pb = statusPriority(keyB);
+                          if (pa !== pb) return pa - pb;
+                          // Within same status group: alphabetical by display name
                           const nameA = (a.name ?? '').toUpperCase();
                           const nameB = (b.name ?? '').toUpperCase();
-                          const salesA = brandSales[nameA] ?? rankMap[a.id] ?? 0;
-                          const salesB = brandSales[nameB] ?? rankMap[b.id] ?? 0;
-                          return salesB - salesA;
+                          return nameA.localeCompare(nameB);
                         });
 
                         // Apply search filter — searches across the merged
@@ -3069,7 +3242,7 @@ export default function SalesRevenue() {
                             <div
                               key={v.id}
                               className={`relative rounded-lg border p-3 transition ${
-                                isDiscontinued ? 'border-amber-300 bg-amber-50'
+                                isDiscontinued ? 'border-red-200 bg-red-50'
                                   : hasAccount ? 'border-emerald-300 bg-emerald-50'
                                   : isContacted ? 'border-yellow-300 bg-yellow-50'
                                   : 'border-slate-100 bg-slate-50 hover:border-slate-300'
@@ -3097,6 +3270,9 @@ export default function SalesRevenue() {
                                           repEmail: ov.repEmail ?? info?.rep?.email ?? '',
                                           repTitle: ov.repTitle ?? '',
                                           account: ov.account ?? info?.rep?.account ?? '',
+                                          b2bUrl: ov.b2bUrl ?? '',
+                                          b2bUsername: ov.b2bUsername ?? '',
+                                          b2bPassword: ov.b2bPassword ?? '',
                                         });
                                         setInlineEdit(null);
                                         setEditingContactsFor(null);
@@ -3112,13 +3288,28 @@ export default function SalesRevenue() {
                                   )}
                                   {(totalOrders > 0 || openOrders > 0) && (
                                     <p className="text-[10px] text-slate-400">
-                                      {openOrders > 0 && (
-                                        <button type="button" onClick={() => setOrderModalVendor({ id: v.id, name: displayName })} className="text-blue-600 font-medium hover:underline focus:outline-none">
-                                          {openOrders} open ▸
-                                        </button>
-                                      )}
-                                      {openOrders > 0 && totalOrders > 0 && <span> · </span>}
-                                      {totalOrders > 0 && <span>{totalOrders} total order{totalOrders === 1 ? '' : 's'}</span>}
+                                      {(() => {
+                                        // d.orders only contains open/pending — compute per-vendor breakdown
+                                        const vendorOrders = d.orders.filter((o) => o.vendor_id === v.id);
+                                        const openCount = vendorOrders.filter((o) => o.status === 'open').length;
+                                        const pendingCount = vendorOrders.filter((o) => o.status === 'pending').length;
+                                        const activeCount = openCount + pendingCount;
+                                        if (activeCount === 0) return null;
+                                        return (
+                                          <>
+                                            <button
+                                              type="button"
+                                              onClick={() => setOrderModalVendor({ id: v.id, name: displayName })}
+                                              className="text-blue-600 font-medium hover:underline focus:outline-none"
+                                            >
+                                              {openCount > 0 && `${openCount} open`}
+                                              {openCount > 0 && pendingCount > 0 && ' · '}
+                                              {pendingCount > 0 && `${pendingCount} pending`}
+                                              {' ▸'}
+                                            </button>
+                                          </>
+                                        );
+                                      })()}
                                     </p>
                                   )}
                                 </div>
@@ -3136,23 +3327,245 @@ export default function SalesRevenue() {
                                 </div>
                               </div>
 
-                              {/* ── Comments (shown on contacted/yellow OR active/green cards) ── */}
-                              {(isContacted || hasAccount) && (
-                                <div className="mt-1.5 mb-1">
-                                  <textarea
-                                    rows={2}
-                                    key={`note-${key}`}
-                                    defaultValue={contactNotes[key] ?? ''}
-                                    onBlur={(e) => handleContactNoteChange(key, e.target.value)}
-                                    placeholder={hasAccount ? 'Comments about this account…' : 'Notes about this contact…'}
-                                    className={`w-full text-[11px] rounded-lg px-2.5 py-1.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 resize-none ${
-                                      hasAccount
-                                        ? 'border border-emerald-200 bg-emerald-50 focus:ring-emerald-400'
-                                        : 'border border-yellow-200 bg-yellow-50 focus:ring-yellow-400'
-                                    }`}
-                                  />
-                                </div>
-                              )}
+                              {/* ── Comments thread ── */}
+                              {(() => {
+                                const comments = getActiveComments(key);
+                                const archivedCount = getArchivedComments(key).length;
+                                const draft = commentDrafts[key] ?? '';
+                                return (
+                                  <div className="mt-1.5 mb-1 space-y-1">
+                                    {/* Archive viewer trigger — only shown if there's anything archived */}
+                                    {archivedCount > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => { setArchiveViewerKey(key); setArchiveViewerName(displayName); }}
+                                        className="text-[10px] text-slate-500 hover:text-slate-800 hover:underline mb-1"
+                                      >
+                                        📁 View {archivedCount} archived comment{archivedCount === 1 ? '' : 's'}
+                                      </button>
+                                    )}
+                                    {/* Existing comments */}
+                                    {comments.map((c) => (
+                                      <div
+                                        key={c.id}
+                                        className={`group relative rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 ${
+                                          hasAccount
+                                            ? 'bg-emerald-50 border border-emerald-200'
+                                            : isDiscontinued
+                                              ? 'bg-amber-50 border border-amber-200'
+                                              : 'bg-slate-50 border border-slate-200'
+                                        }`}
+                                      >
+                                        {editingCommentId === `${key}:${c.id}` ? (
+                                          /* ── Inline edit mode ── */
+                                          <div className="space-y-1">
+                                            <textarea
+                                              autoFocus
+                                              rows={3}
+                                              value={editingCommentText}
+                                              onChange={(e) => setEditingCommentText(e.target.value)}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditComment(key, c.id, editingCommentText); }
+                                                if (e.key === 'Escape') { setEditingCommentId(null); setEditingCommentText(''); }
+                                              }}
+                                              className="w-full text-[11px] rounded px-2 py-1 border border-blue-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
+                                            />
+                                            <div className="flex gap-1">
+                                              <button type="button" onClick={() => handleEditComment(key, c.id, editingCommentText)} disabled={!editingCommentText.trim()} className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition">Save</button>
+                                              <button type="button" onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }} className="text-[10px] px-2 py-0.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          /* ── Read mode ── */
+                                          <>
+                                            <p className={`leading-snug pr-10 ${expandedComments.has(`${key}:${c.id}`) ? 'whitespace-pre-wrap' : ''}`}>
+                                              {isCommentLong(c.text) && !expandedComments.has(`${key}:${c.id}`)
+                                                ? <>{truncateComment(c.text)}<span className="text-slate-400">…</span></>
+                                                : c.text}
+                                            </p>
+                                            {isCommentLong(c.text) && (
+                                              <button
+                                                type="button"
+                                                onClick={() => toggleCommentExpand(`${key}:${c.id}`)}
+                                                className="text-[9px] text-blue-500 hover:text-blue-700 mt-0.5 font-medium"
+                                              >
+                                                {expandedComments.has(`${key}:${c.id}`) ? 'Show less ▲' : 'Show more ▼'}
+                                              </button>
+                                            )}
+                                            <p className="text-[9px] text-slate-400 mt-0.5">
+                                              {c.createdAt} CT
+                                              {c.editedAt && <span className="ml-1 italic">(edited {c.editedAt} CT)</span>}
+                                            </p>
+                                            {/* Reply link */}
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                setReplyDrafts((prev) =>
+                                                  `${key}:${c.id}` in prev
+                                                    ? Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`))
+                                                    : { ...prev, [`${key}:${c.id}`]: '' }
+                                                )
+                                              }
+                                              className="text-[10px] font-bold text-blue-600 hover:text-blue-800 mt-1"
+                                            >
+                                              Reply
+                                            </button>
+                                            {/* Edit + Archive + Delete buttons — appear on hover */}
+                                            <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                              <button
+                                                type="button"
+                                                onClick={() => { setEditingCommentId(`${key}:${c.id}`); setEditingCommentText(c.text); }}
+                                                title="Edit comment"
+                                                className="text-slate-300 hover:text-blue-500"
+                                              >
+                                                <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M8.5 1.5a1.5 1.5 0 0 1 2.12 2.12L9.5 4.74 7.26 2.5 8.5 1.5zM6.5 3.26 1 8.76V11h2.24l5.5-5.5L6.5 3.26z"/></svg>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleArchiveComment(key, c.id)}
+                                                title="Archive comment (365-day retention)"
+                                                className="text-slate-300 hover:text-amber-500"
+                                              >
+                                                <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M1 2h10v2H1V2zm1 3h8v6H2V5zm2 1v1h4V6H4z"/></svg>
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDeleteComment(key, c.id)}
+                                                title="Delete comment"
+                                                className="text-slate-300 hover:text-red-500"
+                                              >
+                                                <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M9 3L6 6l3 3-1 1-3-3-3 3-1-1 3-3-3-3 1-1 3 3 3-3z"/></svg>
+                                              </button>
+                                            </div>
+
+                                            {/* Replies thread */}
+                                            {(c.replies ?? []).length > 0 && (
+                                              <div className="mt-2 ml-3 pl-2 border-l-2 border-slate-200 space-y-1">
+                                                {(c.replies ?? []).map((r) => {
+                                                  const replyKey = `${key}:${c.id}:r:${r.id}`;
+                                                  const replyExpanded = expandedComments.has(replyKey);
+                                                  const replyLong = isCommentLong(r.text);
+                                                  return (
+                                                  <div key={r.id} className="group/reply relative bg-white/70 rounded px-2 py-1 text-[10.5px] text-slate-600">
+                                                    <p className={`leading-snug pr-5 ${replyExpanded ? 'whitespace-pre-wrap' : ''}`}>
+                                                      {replyLong && !replyExpanded
+                                                        ? <>{truncateComment(r.text)}<span className="text-slate-400">…</span></>
+                                                        : r.text}
+                                                    </p>
+                                                    {replyLong && (
+                                                      <button
+                                                        type="button"
+                                                        onClick={() => toggleCommentExpand(replyKey)}
+                                                        className="text-[9px] text-blue-500 hover:text-blue-700 mt-0.5 font-medium"
+                                                      >
+                                                        {replyExpanded ? 'Show less ▲' : 'Show more ▼'}
+                                                      </button>
+                                                    )}
+                                                    <p className="text-[9px] text-slate-400 mt-0.5">↳ {r.createdAt} CT</p>
+                                                    <button
+                                                      type="button"
+                                                      onClick={() => handleDeleteReply(key, c.id, r.id)}
+                                                      title="Delete reply"
+                                                      className="absolute top-1 right-1 opacity-0 group-hover/reply:opacity-100 transition-opacity text-slate-300 hover:text-red-500"
+                                                    >
+                                                      <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="currentColor"><path d="M9 3L6 6l3 3-1 1-3-3-3 3-1-1 3-3-3-3 1-1 3 3 3-3z"/></svg>
+                                                    </button>
+                                                  </div>
+                                                  );
+                                                })}
+                                              </div>
+                                            )}
+
+                                            {/* Reply draft input */}
+                                            {`${key}:${c.id}` in replyDrafts && (
+                                              <div className="mt-2 ml-3 pl-2 border-l-2 border-blue-300">
+                                                <textarea
+                                                  autoFocus
+                                                  rows={2}
+                                                  value={replyDrafts[`${key}:${c.id}`] ?? ''}
+                                                  onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [`${key}:${c.id}`]: e.target.value }))}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === 'Enter' && !e.shiftKey) {
+                                                      e.preventDefault();
+                                                      const text = replyDrafts[`${key}:${c.id}`] ?? '';
+                                                      if (text.trim()) handleAddReply(key, c.id, text, displayName);
+                                                    }
+                                                    if (e.key === 'Escape') {
+                                                      setReplyDrafts((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`)));
+                                                    }
+                                                  }}
+                                                  placeholder="Reply… (Enter to send, Esc to cancel)"
+                                                  className="w-full text-[10.5px] rounded px-2 py-1 border border-blue-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
+                                                />
+                                                <div className="flex gap-1 mt-1">
+                                                  <button type="button"
+                                                    onClick={() => {
+                                                      const text = replyDrafts[`${key}:${c.id}`] ?? '';
+                                                      if (text.trim()) handleAddReply(key, c.id, text, displayName);
+                                                    }}
+                                                    disabled={!(replyDrafts[`${key}:${c.id}`] ?? '').trim()}
+                                                    className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition">
+                                                    Send reply
+                                                  </button>
+                                                  <button type="button"
+                                                    onClick={() => setReplyDrafts((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`)))}
+                                                    className="text-[10px] px-2 py-0.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">
+                                                    Cancel
+                                                  </button>
+                                                  <span className="text-[9px] text-slate-400 self-center ml-1">📧 emails flowermound@footsolutions.com</span>
+                                                </div>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+                                    ))}
+
+                                    {/* Add comment input */}
+                                    <div className="flex gap-1 items-end">
+                                      <textarea
+                                        rows={2}
+                                        value={draft}
+                                        onChange={(e) =>
+                                          setCommentDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                                        }
+                                        onFocus={(e) => { e.currentTarget.style.resize = 'vertical'; }}
+                                        onBlur={(e) => { e.currentTarget.style.height = ''; e.currentTarget.style.resize = 'none'; }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            if (draft.trim()) {
+                                              handleAddComment(key, draft, displayName);
+                                              setCommentDrafts((prev) => ({ ...prev, [key]: '' }));
+                                            }
+                                          }
+                                        }}
+                                        placeholder="Add a comment… (Enter to save)"
+                                        className={`flex-1 text-[11px] rounded-lg px-2.5 py-1.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 resize-none transition-all ${
+                                          hasAccount
+                                            ? 'border border-emerald-200 bg-emerald-50 focus:ring-emerald-400'
+                                            : isDiscontinued
+                                              ? 'border border-amber-200 bg-amber-50 focus:ring-amber-400'
+                                              : 'border border-slate-200 bg-slate-50 focus:ring-blue-400'
+                                        }`}
+                                        style={{ resize: 'none' }}
+                                      />
+                                      {draft.trim() && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            handleAddComment(key, draft, displayName);
+                                            setCommentDrafts((prev) => ({ ...prev, [key]: '' }));
+                                          }}
+                                          className="flex-shrink-0 text-[10px] px-2 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition mb-0.5"
+                                        >
+                                          Add
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })()}
 
                               {/* ── Edit card form ── */}
                               {isEditingCard ? (
@@ -3173,6 +3586,10 @@ export default function SalesRevenue() {
                                   <input type="text" value={vendorCardDraft.repTitle ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repTitle: e.target.value }))} className={inputCls} placeholder="Rep title / role" />
                                   <input type="tel" value={vendorCardDraft.repPhone ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repPhone: e.target.value }))} className={inputCls} placeholder="Rep phone" />
                                   <input type="email" value={vendorCardDraft.repEmail ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, repEmail: e.target.value }))} className={inputCls} placeholder="Rep email" />
+                                  <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide pt-1">B2B Site Login</p>
+                                  <input type="text" value={vendorCardDraft.b2bUrl ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, b2bUrl: e.target.value }))} className={inputCls} placeholder="Portal URL (https://...)" />
+                                  <input type="text" autoComplete="off" value={vendorCardDraft.b2bUsername ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, b2bUsername: e.target.value }))} className={inputCls} placeholder="Username" />
+                                  <input type="password" autoComplete="new-password" value={vendorCardDraft.b2bPassword ?? ''} onChange={(e) => setVendorCardDraft((d) => ({ ...d, b2bPassword: e.target.value }))} className={inputCls} placeholder="Password" />
                                   <div className="flex gap-1.5 pt-1">
                                     <button onClick={() => saveVendorCard(v.id)} className="flex-1 text-[11px] py-1 rounded bg-blue-600 text-white font-medium hover:bg-blue-700 transition">Save</button>
                                     <button onClick={() => setEditingVendorCard(null)} className="flex-1 text-[11px] py-1 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
@@ -3184,16 +3601,16 @@ export default function SalesRevenue() {
                               ) : (
                                 /* ── Contact info display ── */
                                 <div className="space-y-0.5">
-                                  {accountNumber && (
-                                    <div className="flex items-center gap-1.5">
-                                      <p className="text-[11px] text-slate-700 min-w-0 truncate">
-                                        <span className="text-slate-400">Account #</span>
-                                        {' '}
-                                        <span className="font-mono font-semibold">{accountNumber}</span>
-                                      </p>
-                                      <CopyButton value={accountNumber} label="account number" />
-                                    </div>
-                                  )}
+                                  {/* Account # — always shown, inline editable */}
+                                  <InlineAccountEditor
+                                    accountNumber={accountNumber}
+                                    onSave={(trimmed) => {
+                                      const next = { ...vendorOverrides, [v.id]: { ...(vendorOverrides[v.id] ?? {}), account: trimmed || undefined } };
+                                      vendorSettingsMutation.mutate(buildSettingsUpdate({
+                                        vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, val]) => [String(k), val])),
+                                      }));
+                                    }}
+                                  />
                                   {phone && (
                                     <div className="flex items-center gap-1.5">
                                       <a href={`tel:${phone.replace(/\D/g,'')}`} className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 min-w-0 truncate"><span>📞</span>{phone}</a>
@@ -3212,6 +3629,61 @@ export default function SalesRevenue() {
                                       <CopyButton value={website} label="website" />
                                     </div>
                                   )}
+                                  {/* B2B Site Login — always shown so the
+                                      owner can drop creds in without having
+                                      to enter the full edit form. Each row
+                                      becomes a placeholder when empty. */}
+                                  <div className="mt-1.5 pt-1.5 border-t border-slate-200 space-y-0.5">
+                                    <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">B2B Site Login</p>
+                                    <InlineB2BField
+                                      icon="🔗"
+                                      placeholder="Add portal URL"
+                                      value={ov.b2bUrl ?? ''}
+                                      copyLabel="B2B URL"
+                                      renderValue={(val) => (
+                                        <a
+                                          href={val.startsWith('http') ? val : `https://${val}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 min-w-0 truncate"
+                                        >
+                                          <span>🔗</span>{val.replace('https://','').replace('http://','').replace('www.','')}
+                                        </a>
+                                      )}
+                                      onSave={(trimmed) => {
+                                        const next = { ...vendorOverrides, [v.id]: { ...(vendorOverrides[v.id] ?? {}), b2bUrl: trimmed || undefined } };
+                                        vendorSettingsMutation.mutate(buildSettingsUpdate({
+                                          vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, val]) => [String(k), val])),
+                                        }));
+                                      }}
+                                    />
+                                    <InlineB2BField
+                                      icon="👤"
+                                      placeholder="Add username"
+                                      value={ov.b2bUsername ?? ''}
+                                      copyLabel="B2B username"
+                                      onSave={(trimmed) => {
+                                        const next = { ...vendorOverrides, [v.id]: { ...(vendorOverrides[v.id] ?? {}), b2bUsername: trimmed || undefined } };
+                                        vendorSettingsMutation.mutate(buildSettingsUpdate({
+                                          vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, val]) => [String(k), val])),
+                                        }));
+                                      }}
+                                    />
+                                    <InlineB2BField
+                                      icon="🔑"
+                                      placeholder="Add password"
+                                      value={ov.b2bPassword ?? ''}
+                                      copyLabel="B2B password"
+                                      isPassword
+                                      onSave={(trimmed) => {
+                                        const next = { ...vendorOverrides, [v.id]: { ...(vendorOverrides[v.id] ?? {}), b2bPassword: trimmed || undefined } };
+                                        vendorSettingsMutation.mutate(buildSettingsUpdate({
+                                          vendorOverrides: Object.fromEntries(Object.entries(next).map(([k, val]) => [String(k), val])),
+                                        }));
+                                      }}
+                                    />
+                                  </div>
                                   {hasRep && (
                                     <div className="mt-1.5 pt-1.5 border-t border-slate-200 space-y-0.5">
                                       <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wide">Rep</p>
@@ -3235,8 +3707,8 @@ export default function SalesRevenue() {
                                       )}
                                     </div>
                                   )}
-                                  {!accountNumber && !phone && !email && !website && !hasRep && (
-                                    <p className="text-[11px] text-slate-400 italic">No contact info — click ✏ to add</p>
+                                  {!accountNumber && !phone && !email && !website && !hasRep && !ov.b2bUrl && !ov.b2bUsername && !ov.b2bPassword && (
+                                    <p className="text-[11px] text-slate-400 italic">Add contact info / B2B login below ↓</p>
                                   )}
                                 </div>
                               )}
@@ -3345,18 +3817,346 @@ export default function SalesRevenue() {
                                 );
                               })()}
 
-                              {/* ── Discontinue button — bottom-right corner ── */}
-                              <div className="flex justify-end mt-2">
+                              {/* ── Discontinue + Delete buttons — bottom-right corner ── */}
+                              <div className="flex items-center justify-end gap-1.5 mt-2">
                                 <button type="button" onClick={() => handleDiscontinuedToggle(key, v.name ?? `Vendor ${v.id}`)}
-                                  className={`text-[10px] px-1.5 py-0.5 rounded border transition ${isDiscontinued ? 'border-amber-400 bg-amber-100 text-amber-800 hover:bg-amber-200' : 'border-slate-200 text-slate-400 hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'}`}>
-                                  {isDiscontinued ? '⚠ Discontinuing' : 'Discontinue?'}
+                                  className={`text-[10px] px-1.5 py-0.5 rounded border transition ${isDiscontinued ? 'border-red-300 bg-red-100 text-red-800 hover:bg-red-200' : 'border-slate-200 text-slate-400 hover:border-red-200 hover:text-red-600 hover:bg-red-50'}`}>
+                                  {isDiscontinued ? '🔴 Discontinuing' : 'Discontinue?'}
                                 </button>
+                                {isDiscontinued && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteVendor(key, v.name ?? `Vendor ${v.id}`)}
+                                    className="text-[10px] px-1.5 py-0.5 rounded border border-red-300 bg-red-100 text-red-700 hover:bg-red-200 transition"
+                                    title="Remove this vendor card from your directory"
+                                  >
+                                    🗑 Delete card
+                                  </button>
+                                )}
                               </div>
                             </div>
                           );
                         });
                       })()}
                     </div>
+
+                    {/* ── Custom vendor cards (manually added, not from Heartland) ── */}
+                    {customVendors.filter((cv) => !deletedVendors.has(`vendor-custom:${cv.id}`)).length > 0 && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 mt-3">
+                        {customVendors
+                          .filter((cv) => !deletedVendors.has(`vendor-custom:${cv.id}`))
+                          .map((cv) => {
+                            const key = `vendor-custom:${cv.id}`;
+                            const ov = (vendorOverrides as Record<string, VendorOverride>)[cv.id] ?? {};
+                            const hasAccount = activeAccounts.has(key);
+                            const isDiscontinued = discontinuedVendors.has(key);
+                            const comments = getActiveComments(key);
+                            const archivedCount = getArchivedComments(key).length;
+                            const customDisplayName = ov.displayName ?? cv.name;
+                            const draft = commentDrafts[key] ?? '';
+                            return (
+                              <div
+                                key={cv.id}
+                                className={`rounded-xl border p-3 flex flex-col gap-1.5 text-xs relative ${
+                                  hasAccount
+                                    ? 'border-emerald-300 bg-emerald-50/60'
+                                    : isDiscontinued
+                                      ? 'border-red-200 bg-red-50/40'
+                                      : 'border-slate-200 bg-white'
+                                }`}
+                              >
+                                {/* Header */}
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="font-semibold text-slate-900 truncate">{ov.displayName ?? cv.name}</span>
+                                    <span className="text-[9px] text-slate-400 bg-slate-100 rounded px-1 py-0.5 flex-shrink-0">custom</span>
+                                  </div>
+                                  {hasAccount && (
+                                    <span className="flex items-center gap-0.5 text-[10px] text-emerald-700 font-medium flex-shrink-0">
+                                      <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M10 3L5 8.5 2 5.5l-1 1L5 10.5l6-7z"/></svg>
+                                      Active
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Contact info */}
+                                {(ov.phone || ov.email || ov.website) && (
+                                  <div className="space-y-0.5 text-[11px] text-slate-600">
+                                    {ov.phone && <div>📞 {ov.phone}</div>}
+                                    {ov.email && <div>✉ {ov.email}</div>}
+                                    {ov.website && <div>🌐 <a href={ov.website} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{ov.website}</a></div>}
+                                  </div>
+                                )}
+                                {ov.account && (
+                                  <div className="text-[10px] text-slate-500">Acct # <span className="font-mono font-medium text-slate-700">{ov.account}</span></div>
+                                )}
+
+                                {/* Active toggle */}
+                                <label className="flex items-center gap-1.5 cursor-pointer mt-0.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={hasAccount}
+                                    onChange={(e) => handleVendorAccountToggle(key, cv.name, e.target.checked)}
+                                    className="w-3 h-3 rounded accent-emerald-600"
+                                  />
+                                  <span className="text-[10px] text-slate-500">Active account</span>
+                                </label>
+
+                                {/* Comments */}
+                                <div className="space-y-1 mt-0.5">
+                                  {/* Archive viewer trigger */}
+                                  {archivedCount > 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() => { setArchiveViewerKey(key); setArchiveViewerName(customDisplayName); }}
+                                      className="text-[10px] text-slate-500 hover:text-slate-800 hover:underline mb-1"
+                                    >
+                                      📁 View {archivedCount} archived comment{archivedCount === 1 ? '' : 's'}
+                                    </button>
+                                  )}
+                                  {comments.map((c) => (
+                                    <div key={c.id} className={`group relative rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 ${hasAccount ? 'bg-emerald-50 border border-emerald-200' : isDiscontinued ? 'bg-red-50 border border-red-200' : 'bg-slate-50 border border-slate-200'}`}>
+                                      {editingCommentId === `${key}:${c.id}` ? (
+                                        <div className="space-y-1">
+                                          <textarea autoFocus rows={3} value={editingCommentText} onChange={(e) => setEditingCommentText(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditComment(key, c.id, editingCommentText); } if (e.key === 'Escape') { setEditingCommentId(null); setEditingCommentText(''); } }}
+                                            className="w-full text-[11px] rounded px-2 py-1 border border-blue-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                                          <div className="flex gap-1">
+                                            <button type="button" onClick={() => handleEditComment(key, c.id, editingCommentText)} disabled={!editingCommentText.trim()} className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition">Save</button>
+                                            <button type="button" onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }} className="text-[10px] px-2 py-0.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <>
+                                          <p className={`leading-snug pr-10 ${expandedComments.has(`${key}:${c.id}`) ? 'whitespace-pre-wrap' : ''}`}>
+                                            {isCommentLong(c.text) && !expandedComments.has(`${key}:${c.id}`)
+                                              ? <>{truncateComment(c.text)}<span className="text-slate-400">…</span></>
+                                              : c.text}
+                                          </p>
+                                          {isCommentLong(c.text) && (
+                                            <button type="button" onClick={() => toggleCommentExpand(`${key}:${c.id}`)} className="text-[9px] text-blue-500 hover:text-blue-700 mt-0.5 font-medium">
+                                              {expandedComments.has(`${key}:${c.id}`) ? 'Show less ▲' : 'Show more ▼'}
+                                            </button>
+                                          )}
+                                          <p className="text-[9px] text-slate-400 mt-0.5">{c.createdAt} CT{c.editedAt && <span className="ml-1 italic">(edited {c.editedAt} CT)</span>}</p>
+                                          <button type="button"
+                                            onClick={() => setReplyDrafts((prev) => `${key}:${c.id}` in prev ? Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`)) : { ...prev, [`${key}:${c.id}`]: '' })}
+                                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 mt-1">Reply</button>
+                                          <div className="absolute top-1.5 right-1.5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <button type="button" onClick={() => { setEditingCommentId(`${key}:${c.id}`); setEditingCommentText(c.text); }} title="Edit comment" className="text-slate-300 hover:text-blue-500">
+                                              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M8.5 1.5a1.5 1.5 0 0 1 2.12 2.12L9.5 4.74 7.26 2.5 8.5 1.5zM6.5 3.26 1 8.76V11h2.24l5.5-5.5L6.5 3.26z"/></svg>
+                                            </button>
+                                            <button type="button" onClick={() => handleArchiveComment(key, c.id)} title="Archive comment" className="text-slate-300 hover:text-amber-500">
+                                              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M1 2h10v2H1V2zm1 3h8v6H2V5zm2 1v1h4V6H4z"/></svg>
+                                            </button>
+                                            <button type="button" onClick={() => handleDeleteComment(key, c.id)} title="Delete comment" className="text-slate-300 hover:text-red-500">
+                                              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="currentColor"><path d="M9 3L6 6l3 3-1 1-3-3-3 3-1-1 3-3-3-3 1-1 3 3 3-3z"/></svg>
+                                            </button>
+                                          </div>
+
+                                          {/* Replies */}
+                                          {(c.replies ?? []).length > 0 && (
+                                            <div className="mt-2 ml-3 pl-2 border-l-2 border-slate-200 space-y-1">
+                                              {(c.replies ?? []).map((r) => (
+                                                <div key={r.id} className="group/reply relative bg-white/70 rounded px-2 py-1 text-[10.5px] text-slate-600">
+                                                  <p className="leading-snug whitespace-pre-wrap pr-5">{r.text}</p>
+                                                  <p className="text-[9px] text-slate-400 mt-0.5">↳ {r.createdAt} CT</p>
+                                                  <button type="button" onClick={() => handleDeleteReply(key, c.id, r.id)} title="Delete reply" className="absolute top-1 right-1 opacity-0 group-hover/reply:opacity-100 transition-opacity text-slate-300 hover:text-red-500">
+                                                    <svg className="w-2.5 h-2.5" viewBox="0 0 12 12" fill="currentColor"><path d="M9 3L6 6l3 3-1 1-3-3-3 3-1-1 3-3-3-3 1-1 3 3 3-3z"/></svg>
+                                                  </button>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+
+                                          {/* Reply draft */}
+                                          {`${key}:${c.id}` in replyDrafts && (
+                                            <div className="mt-2 ml-3 pl-2 border-l-2 border-blue-300">
+                                              <textarea autoFocus rows={2} value={replyDrafts[`${key}:${c.id}`] ?? ''}
+                                                onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [`${key}:${c.id}`]: e.target.value }))}
+                                                onKeyDown={(e) => {
+                                                  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); const t = replyDrafts[`${key}:${c.id}`] ?? ''; if (t.trim()) handleAddReply(key, c.id, t, customDisplayName); }
+                                                  if (e.key === 'Escape') { setReplyDrafts((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`))); }
+                                                }}
+                                                placeholder="Reply… (Enter to send, Esc to cancel)"
+                                                className="w-full text-[10.5px] rounded px-2 py-1 border border-blue-300 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none" />
+                                              <div className="flex gap-1 mt-1">
+                                                <button type="button"
+                                                  onClick={() => { const t = replyDrafts[`${key}:${c.id}`] ?? ''; if (t.trim()) handleAddReply(key, c.id, t, customDisplayName); }}
+                                                  disabled={!(replyDrafts[`${key}:${c.id}`] ?? '').trim()}
+                                                  className="text-[10px] px-2 py-0.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition">Send reply</button>
+                                                <button type="button"
+                                                  onClick={() => setReplyDrafts((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => k !== `${key}:${c.id}`)))}
+                                                  className="text-[10px] px-2 py-0.5 rounded border border-slate-200 text-slate-600 hover:bg-slate-50 transition">Cancel</button>
+                                                <span className="text-[9px] text-slate-400 self-center ml-1">📧 emails flowermound@footsolutions.com</span>
+                                              </div>
+                                            </div>
+                                          )}
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                  <div className="flex gap-1 items-end">
+                                    <textarea rows={2} value={draft}
+                                      onChange={(e) => setCommentDrafts((p) => ({ ...p, [key]: e.target.value }))}
+                                      onFocus={(e) => { e.currentTarget.style.resize = 'vertical'; }}
+                                      onBlur={(e) => { e.currentTarget.style.height = ''; e.currentTarget.style.resize = 'none'; }}
+                                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (draft.trim()) { handleAddComment(key, draft, cv.name); setCommentDrafts((p) => ({ ...p, [key]: '' })); } } }}
+                                      placeholder="Add a comment… (Enter to save)"
+                                      className={`flex-1 text-[11px] rounded-lg px-2.5 py-1.5 text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 resize-none ${hasAccount ? 'border border-emerald-200 bg-emerald-50 focus:ring-emerald-400' : isDiscontinued ? 'border border-red-200 bg-red-50 focus:ring-red-400' : 'border border-slate-200 bg-slate-50 focus:ring-blue-400'}`}
+                                      style={{ resize: 'none' }}
+                                    />
+                                    {draft.trim() && (
+                                      <button type="button" onClick={() => { handleAddComment(key, draft, cv.name); setCommentDrafts((p) => ({ ...p, [key]: '' })); }} className="flex-shrink-0 text-[10px] px-2 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition mb-0.5">Add</button>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* Delete custom vendor */}
+                                <div className="flex items-center justify-end mt-1">
+                                  <button type="button" onClick={() => handleDeleteCustomVendor(cv.id, cv.name)}
+                                    className="text-[10px] px-1.5 py-0.5 rounded border border-red-200 text-red-500 hover:bg-red-50 transition">
+                                    🗑 Remove card
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+
+                    {/* ── New Vendor Modal ── */}
+                    {showNewVendorModal && (
+                      <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="new-vendor-title"
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+                        onClick={(e) => { if (e.target === e.currentTarget) setShowNewVendorModal(false); }}
+                      >
+                        <div className="bg-white rounded-xl shadow-xl w-full max-w-sm p-5">
+                          <h3 id="new-vendor-title" className="text-sm font-semibold text-slate-900 mb-4">Add Vendor Card</h3>
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Vendor name <span className="text-red-500">*</span></label>
+                              <input type="text" value={newVendorDraft.name} onChange={(e) => setNewVendorDraft((d) => ({ ...d, name: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="e.g. SHU-RE-NU" autoFocus />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Phone</label>
+                              <input type="tel" value={newVendorDraft.phone ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, phone: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="800-555-1234" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Email</label>
+                              <input type="email" value={newVendorDraft.email ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, email: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="orders@vendor.com" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Website</label>
+                              <input type="text" value={newVendorDraft.website ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, website: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="https://vendor.com" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Account #</label>
+                              <input type="text" value={newVendorDraft.account ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, account: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="e.g. FS-12345" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Rep name</label>
+                              <input type="text" value={newVendorDraft.repName ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, repName: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="Rep name" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Rep phone</label>
+                              <input type="tel" value={newVendorDraft.repPhone ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, repPhone: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="Rep phone" />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-medium text-slate-600 block mb-0.5">Rep email</label>
+                              <input type="email" value={newVendorDraft.repEmail ?? ''} onChange={(e) => setNewVendorDraft((d) => ({ ...d, repEmail: e.target.value }))} className="w-full text-[11px] border border-slate-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white" placeholder="Rep email" />
+                            </div>
+                          </div>
+                          <div className="flex gap-2 mt-4">
+                            <button
+                              type="button"
+                              onClick={handleCreateCustomVendor}
+                              disabled={!newVendorDraft.name.trim()}
+                              className="flex-1 text-sm py-2 rounded-lg bg-blue-600 text-white font-medium hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed transition"
+                            >
+                              Create Vendor
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowNewVendorModal(false)}
+                              className="flex-1 text-sm py-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Archived Comments Viewer Modal ── */}
+                    {archiveViewerKey && (
+                      <div
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="archive-viewer-title"
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+                        onClick={(e) => { if (e.target === e.currentTarget) setArchiveViewerKey(null); }}
+                      >
+                        <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
+                          <div className="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+                            <div>
+                              <h3 id="archive-viewer-title" className="text-sm font-semibold text-slate-900">
+                                Archived comments — {archiveViewerName}
+                              </h3>
+                              <p className="text-[11px] text-slate-500 mt-0.5">Auto-deleted 365 days after archiving</p>
+                            </div>
+                            <button onClick={() => setArchiveViewerKey(null)} className="text-slate-400 hover:text-slate-700" aria-label="Close">✕</button>
+                          </div>
+                          <div className="flex-1 overflow-y-auto p-5 space-y-2">
+                            {(() => {
+                              const archived = getArchivedComments(archiveViewerKey);
+                              if (archived.length === 0) {
+                                return <p className="text-xs text-slate-500">No archived comments for this vendor.</p>;
+                              }
+                              const nowSecs = Math.floor(Date.now() / 1000);
+                              return archived.map((c) => {
+                                const daysLeft = c.archiveExpiresAt
+                                  ? Math.max(0, Math.floor((c.archiveExpiresAt - nowSecs) / 86400))
+                                  : null;
+                                return (
+                                  <div key={c.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
+                                    <p className="leading-snug whitespace-pre-wrap">{c.text}</p>
+                                    <div className="flex items-center justify-between mt-2 text-[10px] text-slate-500">
+                                      <div>
+                                        <span>{c.createdAt} CT</span>
+                                        {c.editedAt && <span className="ml-1 italic">(edited {c.editedAt} CT)</span>}
+                                        {c.archivedAt && <span className="ml-1">· archived {c.archivedAt} CT</span>}
+                                        {daysLeft !== null && <span className="ml-1 text-amber-600">· {daysLeft}d left</span>}
+                                      </div>
+                                      <div className="flex gap-1">
+                                        <button type="button" onClick={() => handleUnarchiveComment(archiveViewerKey, c.id)} className="text-[10px] px-2 py-0.5 rounded border border-blue-200 text-blue-700 hover:bg-blue-50 transition">Unarchive</button>
+                                        <button type="button" onClick={() => { handleDeleteComment(archiveViewerKey, c.id); }} className="text-[10px] px-2 py-0.5 rounded border border-red-200 text-red-600 hover:bg-red-50 transition">Delete</button>
+                                      </div>
+                                    </div>
+                                    {(c.replies ?? []).length > 0 && (
+                                      <div className="mt-2 ml-3 pl-2 border-l-2 border-slate-200 space-y-1">
+                                        {(c.replies ?? []).map((r) => (
+                                          <div key={r.id} className="bg-white rounded px-2 py-1 text-[11px] text-slate-600">
+                                            <p className="leading-snug whitespace-pre-wrap">{r.text}</p>
+                                            <p className="text-[9px] text-slate-400 mt-0.5">↳ {r.createdAt} CT</p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              });
+                            })()}
+                          </div>
+                          <div className="px-5 py-3 border-t border-slate-100 flex justify-end">
+                            <button onClick={() => setArchiveViewerKey(null)} className="px-4 py-1.5 text-sm rounded border border-slate-200 text-slate-700 hover:bg-slate-50 transition">Close</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   )}
 
@@ -3501,6 +4301,55 @@ export default function SalesRevenue() {
         )}
 
       </main>
+
+      {/* ── Action Items side drawer ──────────────────────────────────
+           A slide-in panel from the left. The trigger button is fixed
+           to the left edge so it's always reachable regardless of tab. */}
+
+      {/* Trigger button — fixed left edge, visible on all tabs */}
+      <ActionDrawerTrigger
+        open={actionDrawerOpen}
+        onToggle={() => setActionDrawerOpen((o) => !o)}
+      />
+
+      {/* Backdrop */}
+      {actionDrawerOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/30 backdrop-blur-[1px]"
+          onClick={() => setActionDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Drawer panel */}
+      <aside
+        role="dialog"
+        aria-modal="true"
+        aria-label="Action Items"
+        className={`fixed top-0 left-0 z-50 h-full w-[min(600px,96vw)] bg-white shadow-2xl flex flex-col transition-transform duration-300 ease-in-out ${
+          actionDrawerOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        {/* Drawer header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-amber-50 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <StickyNote className="w-4 h-4 text-amber-500" />
+            <span className="text-sm font-semibold text-amber-800">Action Items</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionDrawerOpen(false)}
+            className="text-slate-400 hover:text-slate-700 text-xl leading-none p-1"
+            aria-label="Close action items"
+          >
+            ×
+          </button>
+        </div>
+        {/* Drawer body — scrollable */}
+        <div className="flex-1 overflow-y-auto p-4">
+          <NotesPanel />
+        </div>
+      </aside>
 
       {/* Per-vendor open orders modal */}
       {orderModalVendor && purchasingQ.data && (() => {
@@ -3940,8 +4789,9 @@ export default function SalesRevenue() {
         );
       })()}
 
-      {/* ── Sales AI Chatbot ── */}
-      <SalesChat />
+      {/* ── FS Assistant has replaced the page-scoped Sales chat. Bubble
+            mounts globally via <ProtectedShell />. Component file
+            retained for rollback per Task 18.2 / Req 10.2. ── */}
     </div>
   );
 }
@@ -4231,11 +5081,75 @@ function AlertsPanel({
   );
 }
 
+// ── Action Items drawer trigger button ───────────────────────────────
+// Fixed to the left edge of the viewport. Shows a badge with the count
+// of active (not-done) items so the owner always knows what's pending.
+
+function ActionDrawerTrigger({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  const [activeCount, setActiveCount] = useState(0);
+  const [pulse, setPulse] = useState(false);
+  const prevCount = useRef(0);
+
+  useEffect(() => {
+    function sync() {
+      try {
+        const notes = JSON.parse(window.localStorage.getItem(NOTES_KEY) ?? '[]') as Array<{ done?: boolean }>;
+        const count = notes.filter((n) => !n.done).length;
+        // Trigger heartbeat when a new item is added
+        if (count > prevCount.current) {
+          setPulse(true);
+          setTimeout(() => setPulse(false), 1200);
+        }
+        prevCount.current = count;
+        setActiveCount(count);
+      } catch { /* ignore */ }
+    }
+    sync();
+    window.addEventListener('storage', sync);
+    const interval = setInterval(sync, 1500);
+    return () => { window.removeEventListener('storage', sync); clearInterval(interval); };
+  }, []);
+
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-label={open ? 'Close action items' : 'Open action items'}
+      title="Action Items"
+      className={`fixed left-0 top-1/2 -translate-y-1/2 z-50 flex flex-col items-center justify-center gap-1.5
+        w-11 py-5 rounded-r-2xl shadow-xl border border-l-0 transition-all duration-300
+        ${open
+          ? 'bg-amber-500 border-amber-500 text-white'
+          : activeCount > 0
+            ? 'bg-amber-50 border-amber-500 text-amber-600 hover:bg-amber-100 ring-2 ring-amber-300 ring-offset-1'
+            : 'bg-amber-50 border-amber-300 text-amber-500 hover:bg-amber-100'
+        }
+        ${pulse && !open ? 'animate-[heartbeat_0.6s_ease-in-out_2]' : ''}
+      `}
+    >
+      <StickyNote className={`w-5 h-5 flex-shrink-0 ${pulse && !open ? 'text-amber-500' : ''}`} />
+      {activeCount > 0 && (
+        <span className={`text-[11px] font-bold leading-none px-1.5 py-0.5 rounded-full min-w-[20px] text-center transition-all
+          ${open ? 'bg-white text-amber-600' : 'bg-amber-400 text-white'}
+          ${pulse && !open ? 'scale-125' : 'scale-100'}
+        `}>
+          {activeCount > 99 ? '99+' : activeCount}
+        </span>
+      )}
+      <span className="text-[10px] font-bold tracking-widest uppercase"
+        style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)' }}>
+        Actions
+      </span>
+    </button>
+  );
+}
+
 // ── Action Items panel — multi-column with assignees ─────────────────
 interface DashNote {
   id: string;
   text: string;
   createdAt: string;
+  updatedAt?: string;
   done: boolean;
   assignee?: string; // column id
 }
@@ -4261,19 +5175,66 @@ interface NoteItemProps {
   onToggle: (id: string) => void;
   onRemove: (id: string) => void;
   onReassign: (id: string, assignee: string | undefined) => void;
+  onEdit: (id: string, newText: string) => void;
 }
-function NoteItem({ n, columns, onToggle, onRemove, onReassign }: NoteItemProps) {
-  const dateStamp = new Date(n.createdAt).toLocaleDateString('en-US', {
-    timeZone: 'America/Chicago',
-    month: 'short', day: 'numeric', year: 'numeric',
-  });
+function NoteItem({ n, columns, onToggle, onRemove, onReassign, onEdit }: NoteItemProps) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(n.text);
+
+  // Keep draft in sync if the note text changes externally
+  useEffect(() => { if (!editing) setDraft(n.text); }, [n.text, editing]);
+
+  function saveEdit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== n.text) onEdit(n.id, trimmed);
+    else setDraft(n.text); // revert if empty or unchanged
+  }
+
+  const ctFmt = (iso: string) =>
+    new Date(iso).toLocaleString('en-US', {
+      timeZone: 'America/Chicago',
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+
+  const createdLabel = ctFmt(n.createdAt);
+  const updatedLabel = n.updatedAt && n.updatedAt !== n.createdAt ? ctFmt(n.updatedAt) : null;
+
   return (
     <li className={`flex items-start gap-2 bg-white rounded-lg px-2.5 py-2 border shadow-sm ${n.done ? 'opacity-50 border-slate-100' : 'border-amber-200'}`}>
       <input type="checkbox" checked={n.done} onChange={() => onToggle(n.id)}
         className="mt-0.5 flex-shrink-0 accent-amber-500 cursor-pointer" aria-label={n.done ? 'Unmark done' : 'Mark done'} />
       <div className="flex-1 min-w-0">
-        <span className={`text-xs leading-snug ${n.done ? 'line-through text-slate-400' : 'text-slate-700'}`}>{n.text}</span>
-        <p className="text-[9px] text-slate-400 mt-0.5">{dateStamp}</p>
+        {editing ? (
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={saveEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+              if (e.key === 'Escape') { setDraft(n.text); setEditing(false); }
+            }}
+            rows={2}
+            className="w-full text-xs leading-snug border border-amber-300 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400 resize-none text-slate-700"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => { if (!n.done) setEditing(true); }}
+            className={`w-full text-left text-xs leading-snug ${n.done ? 'line-through text-slate-400 cursor-default' : 'text-slate-700 hover:text-amber-700 cursor-text'}`}
+            title={n.done ? undefined : 'Click to edit'}
+          >
+            {n.text}
+          </button>
+        )}
+        <div className="flex flex-col mt-0.5 gap-0">
+          <p className="text-[9px] text-slate-400">Added {createdLabel} CT</p>
+          {updatedLabel && (
+            <p className="text-[9px] text-slate-400">Edited {updatedLabel} CT</p>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-1 flex-shrink-0">
         <select
@@ -4366,6 +5327,12 @@ function NotesPanel() {
     persistNotes(notes.filter((n) => n.id !== id));
   }
 
+  function editNote(id: string, newText: string) {
+    persistNotes(notes.map((n) =>
+      n.id === id ? { ...n, text: newText, updatedAt: new Date().toISOString() } : n
+    ));
+  }
+
   function reassign(id: string, assignee: string | undefined) {
     persistNotes(notes.map((n) => n.id === id ? { ...n, assignee } : n));
   }
@@ -4392,19 +5359,11 @@ function NotesPanel() {
 
   // Unassigned notes
   const unassigned = notes.filter((n) => !n.assignee || !columns.find((c) => c.id === n.assignee));
-  const totalActive = notes.filter((n) => !n.done).length;
 
   return (
-    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 flex flex-col gap-3">
-      {/* Header */}
+    <div className="flex flex-col gap-3">
+      {/* Header row — "+ Add column" button */}
       <div className="flex items-center gap-2">
-        <StickyNote className="w-4 h-4 text-amber-500" />
-        <h3 className="text-sm font-semibold text-amber-800">Action Items</h3>
-        {totalActive > 0 && (
-          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-400 text-[10px] font-bold text-white">
-            {totalActive}
-          </span>
-        )}
         <button onClick={addColumn}
           className="ml-auto text-[11px] text-amber-600 hover:text-amber-800 border border-amber-300 rounded px-2 py-0.5 hover:bg-amber-100 transition"
           title="Add a new person column">
@@ -4412,8 +5371,8 @@ function NotesPanel() {
         </button>
       </div>
 
-      {/* Columns */}
-      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(180px, 1fr))` }}>
+      {/* Columns — stacked vertically so each gets full drawer width */}
+      <div className="flex flex-col gap-4">
         {columns.map((col) => {
           const colNotes = notes.filter((n) => n.assignee === col.id);
           const colActive = colNotes.filter((n) => !n.done).length;
@@ -4451,7 +5410,7 @@ function NotesPanel() {
               {colNotes.length > 0 ? (
                 <ul className="space-y-1.5">
                   {colNotes.map((n) => (
-                    <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} />
+                    <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} onEdit={editNote} />
                   ))}
                 </ul>
               ) : (
@@ -4475,7 +5434,7 @@ function NotesPanel() {
           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Unassigned</p>
           <ul className="space-y-1.5">
             {unassigned.map((n) => (
-              <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} />
+              <NoteItem key={n.id} n={n} columns={columns} onToggle={toggleDone} onRemove={removeNote} onReassign={reassign} onEdit={editNote} />
             ))}
           </ul>
         </div>
@@ -4873,6 +5832,237 @@ function CopyButton({ value, label }: { value: string; label?: string }) {
   );
 }
 
+// ── Inline editable B2B login field ─────────────────────────────────
+// Always visible on the vendor card (one row each for URL / username /
+// password). Shows a placeholder when empty, value with copy + delete
+// affordances when set. Click anywhere on the row to enter edit mode.
+function InlineB2BField({
+  icon,
+  placeholder,
+  value,
+  copyLabel,
+  isPassword = false,
+  renderValue,
+  onSave,
+}: {
+  icon: string;
+  placeholder: string;
+  value: string;
+  copyLabel: string;
+  isPassword?: boolean;
+  /** Optional custom render for the read-mode value (e.g. anchor link for URLs). */
+  renderValue?: (val: string) => React.ReactNode;
+  onSave: (next: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [reveal, setReveal] = useState(false);
+
+  function startEdit() {
+    setDraft(value);
+    setEditing(true);
+  }
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed !== value) onSave(trimmed);
+    setEditing(false);
+  }
+
+  function cancel() {
+    setDraft(value);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1">
+        <span className="text-[11px]">{icon}</span>
+        <input
+          autoFocus
+          type={isPassword ? 'text' : 'text'}
+          autoComplete="off"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commit(); }
+            else if (e.key === 'Escape') { e.preventDefault(); cancel(); }
+          }}
+          onBlur={commit}
+          className="flex-1 text-[11px] border border-blue-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white min-w-0"
+          placeholder={placeholder}
+        />
+      </div>
+    );
+  }
+
+  if (!value) {
+    return (
+      <button
+        type="button"
+        onClick={startEdit}
+        className="flex items-center gap-1.5 text-[11px] text-slate-400 italic hover:text-slate-700 hover:bg-slate-50 rounded px-1 py-0.5 transition w-full text-left"
+        title={`Add ${copyLabel}`}
+      >
+        <span>{icon}</span>
+        <span>+ {placeholder}</span>
+      </button>
+    );
+  }
+
+  // Password — masked by default with eye toggle.
+  if (isPassword) {
+    const display = reveal ? value : '•'.repeat(Math.min(value.length, 12));
+    return (
+      <div className="flex items-center gap-1.5 group">
+        <button
+          type="button"
+          onDoubleClick={startEdit}
+          onClick={(e) => { e.stopPropagation(); setReveal((v) => !v); }}
+          title={reveal ? 'Hide password (double-click to edit)' : 'Show password (double-click to edit)'}
+          className="text-[11px] text-slate-700 flex items-center gap-1 min-w-0 truncate font-mono hover:text-slate-900 cursor-pointer"
+        >
+          <span>{icon}</span>{display}
+        </button>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setReveal((v) => !v); }}
+          title={reveal ? 'Hide password' : 'Show password'}
+          className="flex-shrink-0 text-slate-300 hover:text-blue-500 transition-colors opacity-60 hover:opacity-100"
+        >
+          {reveal
+            ? <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+            : <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          }
+        </button>
+        <CopyButton value={value} label={copyLabel} />
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); startEdit(); }}
+          title="Edit"
+          className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-blue-500 transition"
+        >
+          <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+      </div>
+    );
+  }
+
+  // URL or username — show value (with optional custom renderer for anchor).
+  return (
+    <div className="flex items-center gap-1.5 group">
+      {renderValue
+        ? renderValue(value)
+        : (
+          <p className="text-[11px] text-slate-700 flex items-center gap-1 min-w-0 truncate">
+            <span>{icon}</span>{value}
+          </p>
+        )}
+      <CopyButton value={value} label={copyLabel} />
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); startEdit(); }}
+        title="Edit"
+        className="flex-shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-blue-500 transition"
+      >
+        <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      </button>
+    </div>
+  );
+}
+
+// ── Password row with show/hide + copy ──────────────────────────────
+// Legacy helper kept for any callers that still want a non-editable
+// password row. New B2B login flow uses InlineB2BField instead.
+function PasswordRow({ value }: { value: string }) {
+  const [reveal, setReveal] = useState(false);
+  if (!value) return null;
+  const display = reveal ? value : '•'.repeat(Math.min(value.length, 12));
+  return (
+    <div className="flex items-center gap-1.5">
+      <p className="text-[11px] text-slate-700 flex items-center gap-1 min-w-0 truncate font-mono">
+        <span>🔑</span>{display}
+      </p>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setReveal((v) => !v); }}
+        title={reveal ? 'Hide password' : 'Show password'}
+        aria-label={reveal ? 'Hide password' : 'Show password'}
+        className="flex-shrink-0 text-slate-300 hover:text-blue-500 transition-colors opacity-60 hover:opacity-100"
+      >
+        {reveal
+          ? <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          : <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        }
+      </button>
+      <CopyButton value={value} label="B2B password" />
+    </div>
+  );
+}
+
+// ── Inline account number editor ─────────────────────────────────────
+// Renders directly on every vendor card. Shows the current account number
+// (or a "+ add account #" prompt) and lets the user edit it in place.
+// Extracted as a proper component so React hooks rules are satisfied.
+
+function InlineAccountEditor({
+  accountNumber,
+  onSave,
+}: {
+  accountNumber: string | undefined;
+  onSave: (trimmed: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(accountNumber ?? '');
+
+  // Keep draft in sync if the parent value changes (e.g. after a save)
+  useEffect(() => { setDraft(accountNumber ?? ''); }, [accountNumber]);
+
+  function save() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed === (accountNumber ?? '')) return; // no change
+    onSave(trimmed);
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 min-w-0">
+      <span className="text-[10px] text-slate-400 flex-shrink-0">Acct #</span>
+      {editing ? (
+        <input
+          autoFocus
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') { setDraft(accountNumber ?? ''); setEditing(false); }
+          }}
+          placeholder="e.g. 97378"
+          className="flex-1 min-w-0 text-[11px] font-mono border border-blue-300 rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          className={`flex-1 min-w-0 text-left text-[11px] font-mono rounded px-1.5 py-0.5 border transition ${
+            accountNumber
+              ? 'text-slate-800 font-semibold border-transparent hover:border-slate-300 hover:bg-slate-50'
+              : 'text-slate-400 italic border-dashed border-slate-300 hover:border-blue-300 hover:text-blue-500 hover:bg-blue-50'
+          }`}
+          title="Click to edit account number"
+        >
+          {accountNumber ?? '+ add account #'}
+        </button>
+      )}
+      {accountNumber && !editing && (
+        <CopyButton value={accountNumber} label="account number" />
+      )}
+    </div>
+  );
+}
+
 function LoadingState({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3 text-sm text-slate-500 py-8">
@@ -4926,13 +6116,36 @@ function SyncBar({
   const recentlyCompleted = last && Date.now() - new Date(last).getTime() < 90_000;
   const inProgress = isSyncing || (recentlyCompleted && !status?.durationMs);
   const hasError = status?.status === 'error';
+  const isPartial = status?.status === 'partial';
+  const sectionErrors = (status as { sectionErrors?: Record<string, string> } | undefined)?.sectionErrors ?? {};
+  const partialTooltip =
+    isPartial && Object.keys(sectionErrors).length > 0
+      ? `Partial sync — ${Object.entries(sectionErrors)
+          .map(([k, v]) => `${k}: ${v.slice(0, 200)}`)
+          .join('\n\n')}`
+      : '';
 
   return (
     <div className="flex items-center gap-2">
-      <div className="text-xs text-slate-500" title={last ? new Date(last).toLocaleString() : 'No sync yet'}>
+      <div
+        className="text-xs text-slate-500"
+        title={
+          partialTooltip ||
+          (last ? new Date(last).toLocaleString() : 'No sync yet')
+        }
+      >
         <span className="hidden sm:inline">Synced</span>{' '}
-        <span className={`font-medium ${hasError ? 'text-red-600' : 'text-slate-700'}`}>
+        <span
+          className={`font-medium ${
+            hasError
+              ? 'text-red-600'
+              : isPartial
+                ? 'text-amber-700'
+                : 'text-slate-700'
+          }`}
+        >
           {inProgress ? 'syncing…' : relativeTime(last)}
+          {isPartial && !inProgress ? ' ⚠' : ''}
         </span>
       </div>
       <button

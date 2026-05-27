@@ -133,9 +133,11 @@ export interface TaxSession {
   taxYear: number;
   entityType: string;
   createdAt: string;
+  completedAt?: string;
   status: 'pending' | 'complete' | 'error';
   inputData?: TaxFormData;
   result?: BedrockTaxResponse;
+  errorMessage?: string;
 }
 
 export interface Credential {

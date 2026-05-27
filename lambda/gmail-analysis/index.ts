@@ -30,7 +30,7 @@ import {
   type ContentBlock,
   type Tool,
 } from '@aws-sdk/client-bedrock-runtime';
-import { searchEmails, getMessage } from '../gmail/client';
+import { searchEmails, getMessage, getAttachment } from '../gmail/client';
 import {
   cacheQuery,
   cacheRead,
@@ -42,18 +42,50 @@ import {
 import { tavilySearch } from '../shared/tavily';
 import { kbSemanticSearch as vectorKbSearch } from '../shared/vectorIndex';
 
+// Per-tool extracted callbacks (Phase 0 refactor — see
+// .kiro/specs/fs-assistant-orchestrator/tasks.md task 2.1). These
+// preserve the existing tool surface 1:1; both the chat tool loop and
+// the analyze tool loop dispatch to them so the AgentCore Strands
+// container (Phase 1) can reuse the same callbacks.
+import { cacheQuery as cacheQueryTool } from './tools/cacheQuery';
+import { cacheRead as cacheReadTool } from './tools/cacheRead';
+import { cacheVendorActivity as cacheVendorActivityTool } from './tools/cacheVendorActivity';
+import { cacheStats as cacheStatsTool } from './tools/cacheStats';
+import { kbSemanticSearch as kbSemanticSearchTool } from './tools/kbSemanticSearch';
+import { liveSearchInbox as liveSearchInboxTool } from './tools/liveSearchInbox';
+import { liveReadEmail as liveReadEmailTool } from './tools/liveReadEmail';
+import {
+  verifyFollowUp,
+  readDismissed,
+  resetDismissed,
+  type VerifyFollowUpInput,
+} from './verifyFollowUp';
+
 const dynamoClient = new DynamoDBClient({ region: 'us-east-1' });
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const bedrockClient = new BedrockRuntimeClient({ region: 'us-east-1' });
 const lambdaClient = new LambdaClient({ region: 'us-east-1' });
 
 const SELF_FUNCTION_NAME = process.env['AWS_LAMBDA_FUNCTION_NAME'] ?? 'foot-solutions-gmail-analysis';
+const SALES_CHAT_FN = process.env['SALES_CHAT_FN'] ?? 'foot-solutions-chat-handler';
 
 const TABLE_NAME = process.env['TABLE_NAME']!;
 const OWNER_USER_ID = process.env['OWNER_USER_ID']!;
 const MODEL_ID =
   process.env['BEDROCK_MODEL_ID'] ??
   'global.anthropic.claude-haiku-4-5-20251001-v1:0';
+
+/**
+ * Anthropic 1M-context beta header. Required to unlock Sonnet 4.6's
+ * 1M-token window (without it the model is capped at 200k). Harmless
+ * to include for other Claude models — they ignore unrecognized
+ * beta flags. Passed via `additionalModelRequestFields` on every
+ * Bedrock Converse call so long inbox seeds + tool-result chains
+ * don't truncate.
+ */
+const BEDROCK_BETA_FIELDS = {
+  anthropic_beta: ['context-1m-2025-08-07'],
+};
 
 const STORE_TZ = 'America/Chicago';
 const ANALYSIS_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
@@ -92,6 +124,8 @@ interface GmailEvent {
   contactEmail: string | null;
   summary: string;
   sourceMessageIds: string[];
+  /** Which inbox this came from. Absent = primary (flowermound). */
+  sourceAccount?: string;
 }
 
 interface GmailVendor {
@@ -108,6 +142,8 @@ interface GmailInvoice {
   dueDate: string | null;
   summary: string;
   sourceMessageId: string;
+  /** Which inbox this came from. Absent = primary (flowermound). */
+  sourceAccount?: string;
 }
 
 interface GmailInquiry {
@@ -123,7 +159,12 @@ interface GmailFollowUp {
   title: string;
   why: string;
   suggestedAction: string;
+  urgency?: 'high' | 'medium' | 'low';
   sourceMessageIds: string[];
+  /** Backend-resolved thread ids */
+  sourceThreadIds?: string[];
+  /** Which inbox this came from. Absent = primary (flowermound). */
+  sourceAccount?: string;
 }
 
 interface GmailAnalysis {
@@ -229,16 +270,17 @@ const SUBMIT_ANALYSIS_SCHEMA = {
     followUpsNeeded: {
       type: 'array',
       description:
-        'Things the owner has not yet replied to or finished. Be specific.',
+        'Things the owner has not yet replied to or finished. IMPORTANT: Include vendor emails that are requesting something from the store (e.g. "please send your resale certificate", "can you confirm your order", "we need payment info", "please complete your account setup", "awaiting your response"). These vendor requests are easy to miss — scan ALL vendor emails for any that are waiting on the owner. Also include unanswered customer threads and any other pending actions.',
       items: {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          why: { type: 'string' },
+          why: { type: 'string', description: 'Why this needs attention — be specific about what was requested and by whom.' },
           suggestedAction: { type: 'string' },
+          urgency: { type: 'string', enum: ['high', 'medium', 'low'], description: 'high = time-sensitive or blocking an order/account; medium = should reply within a few days; low = nice to have' },
           sourceMessageIds: { type: 'array', items: { type: 'string' } },
         },
-        required: ['title', 'why', 'suggestedAction', 'sourceMessageIds'],
+        required: ['title', 'why', 'suggestedAction', 'urgency', 'sourceMessageIds'],
       },
     },
     topSenders: {
@@ -355,6 +397,24 @@ const ANALYZE_TOOLS: Tool[] = [
 ];
 
 const CHAT_TOOLS: Tool[] = [
+  {
+    toolSpec: {
+      name: 'call_sales_assistant',
+      description: `Delegate a question to the Sales Assistant agent, which has access to the store's Heartland POS data (sales, inventory, staff, purchasing, brands, customers). Use this when the question requires POS/operational data that the inbox cannot answer — e.g. "what were our sales last week?", "which brands are selling best?", "how many units of orthotics did Becky sell?", "what's our current inventory?". ALWAYS announce to the user that you are calling the Sales Assistant before invoking this tool.`,
+      inputSchema: {
+        json: {
+          type: 'object',
+          properties: {
+            question: {
+              type: 'string',
+              description: 'The question to ask the Sales Assistant, phrased as a standalone query with full context.',
+            },
+          },
+          required: ['question'],
+        },
+      },
+    },
+  },
   {
     toolSpec: {
       name: 'cache_query',
@@ -576,6 +636,8 @@ interface SeedMessage {
   subject: string;
   date: string;
   snippet: string;
+  /** Which inbox this message came from. Absent = primary. */
+  sourceAccount?: string;
 }
 
 async function fetchSeedMetadata(days: number, cap: number): Promise<SeedMessage[]> {
@@ -591,6 +653,7 @@ async function fetchSeedMetadata(days: number, cap: number): Promise<SeedMessage
       subject: r.subject,
       date: r.date,
       snippet: r.snippet,
+      sourceAccount: r.sourceAccount,
     }));
   }
 
@@ -656,11 +719,18 @@ Categories the owner cares about most:
 
 CRITICAL workflow rules — follow exactly:
 1. The seed already gives you enough to draft top_senders, group vendors, and identify candidate items.
-2. You may call cache_read at most 6 times to fill in details for the most important threads (top invoices, top vendor threads, ambiguous customer messages). DO NOT exceed 6 cache_read calls.
-3. You may call cache_query at most 2 times for narrow follow-ups. DO NOT exceed 2 cache_query calls.
+2. You may call cache_read at most 10 times to fill in details for the most important threads (top invoices, top vendor threads, ambiguous customer messages, and any vendor request you plan to include in followUpsNeeded). DO NOT exceed 10 cache_read calls.
+3. You may call cache_query at most 3 times for narrow follow-ups. DO NOT exceed 3 cache_query calls.
 4. You MUST call submit_analysis as your final action. Failure to call submit_analysis means the owner sees nothing.
 5. If you are uncertain about a detail, leave the field null/empty rather than calling more tools — the owner prefers a partial answer over a missing one.
-6. Hard rule: by your 8th total tool call, submit_analysis MUST be the next call.
+6. Hard rule: by your 14th total tool call, submit_analysis MUST be the next call.
+
+CRITICAL — vendor attribution (do not get this wrong):
+- When writing a follow-up item, the vendor name in the title MUST match the actual sender in the from: field of the source email.
+- DO NOT infer the vendor from context, subject line keywords, or your knowledge of common vendors.
+- If the email is from "Joey DeWitt <joey@yaleet.com>", the vendor is "Yaleet (NAOT)" — NOT Aetrex, NOT Drew, NOT any other vendor.
+- If you are not certain which vendor sent a request, call cache_read on the message first to confirm the sender before writing the follow-up.
+- Wrong attribution is worse than no attribution. When in doubt, use the exact name from the from: field.
 
 CRITICAL — message IDs (do not get this wrong):
 - Every sourceMessageIds / sourceMessageId you return MUST be an EXACT string copied from the seed (e.g. "19e4c8a0798d5a47") or from a cache_query / cache_read result's id field.
@@ -680,6 +750,7 @@ SECTION COMPLETENESS — important:
   * Any subject/snippet matching invoice/bill/payment due → at least one entry in invoices[]
   * Any inbound customer message (kind=customer or to: footsolutions, from: an external person) → at least one entry in customerInquiries[]
   * Any unanswered question or pending request → at least one entry in followUpsNeeded[]
+  * CRITICAL: Vendor emails requesting something from the store (resale cert, payment info, order confirmation, account setup docs, catalog requests, etc.) MUST appear in followUpsNeeded[] — these are easy to miss but high priority. Scan every vendor email for inbound requests. ALWAYS call cache_read on the message before writing the follow-up to confirm the actual sender — never guess the vendor from context.
 - Empty is only acceptable when you've checked the seed and there genuinely is no signal in this category. Don't be lazy: a 14-day window almost always has vendors and at least one invoice.
 - For customer inquiries: ALWAYS use the actual sender from the email (e.g. "Jane Doe <jane@example.com>"). NEVER write generic placeholders like "Customer (unknown)" — if you don't have a real sender, drop the entry instead.
 
@@ -695,8 +766,12 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
       ? '(No non-promotional emails in this window.)'
       : seed
           .map(
-            (m, i) =>
-              `[${i + 1}] id=${m.id} | ${m.date} | from: ${m.from} | subject: ${m.subject}\n     snippet: ${m.snippet.slice(0, 240)}`
+            (m, i) => {
+              const acct = m.sourceAccount && m.sourceAccount !== 'flowermound'
+                ? ` [inbox:${m.sourceAccount}]`
+                : '';
+              return `[${i + 1}] id=${m.id} | ${m.date} | from: ${m.from}${acct} | subject: ${m.subject}\n     snippet: ${m.snippet.slice(0, 240)}`;
+            }
           )
           .join('\n');
 
@@ -711,18 +786,26 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
     },
   ];
 
-  const MAX_ROUNDS = 20;
+  const MAX_ROUNDS = 16;
   let analysis: GmailAnalysis | null = null;
   let lastTextResponse: string | null = null;
+  let totalToolCalls = 0; // track across rounds to enforce the hard cap
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    // At round 13 (0-indexed), force submit_analysis via toolChoice so the
+    // model cannot make any more exploratory calls. This matches the "by your
+    // 14th total tool call" rule in the system prompt.
+    const forceSubmit = round >= 13 || totalToolCalls >= 13;
     const response = await bedrockClient.send(
       new ConverseCommand({
         modelId: MODEL_ID,
         system: [{ text: buildAnalyzeSystemPrompt(days, seed.length) }],
         messages,
-        toolConfig: { tools: ANALYZE_TOOLS },
+        toolConfig: forceSubmit
+          ? { tools: ANALYZE_TOOLS, toolChoice: { tool: { name: 'submit_analysis' } } }
+          : { tools: ANALYZE_TOOLS },
         inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+        additionalModelRequestFields: BEDROCK_BETA_FIELDS,
       })
     );
 
@@ -746,6 +829,7 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
         if (!('toolUse' in block) || !block.toolUse) continue;
         const { toolUseId, name, input } = block.toolUse;
         const inp = (input ?? {}) as Record<string, unknown>;
+        totalToolCalls++;
 
         if (name === 'submit_analysis') {
           // The model has emitted its final answer.
@@ -758,28 +842,36 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
             },
           });
         } else if (name === 'cache_query') {
-          const result = JSON.stringify(await cacheQuery(inp as CachedQueryArgs));
+          const result = JSON.stringify(await cacheQueryTool(inp as CachedQueryArgs));
           toolResults.push({
             toolResult: { toolUseId: toolUseId ?? '', content: [{ text: result }], status: 'success' },
           });
         } else if (name === 'cache_read') {
-          const id = String(inp['id'] ?? '');
-          const dateOnly = String(inp['dateOnly'] ?? '') || undefined;
-          const m = await cacheRead(id, dateOnly);
+          const m = await cacheReadTool({
+            id: String(inp['id'] ?? ''),
+            dateOnly: inp['dateOnly'] ? String(inp['dateOnly']) : undefined,
+          });
           toolResults.push({
             toolResult: {
               toolUseId: toolUseId ?? '',
-              content: [{ text: JSON.stringify(m ?? { error: `Message ${id} not in cache` }) }],
+              content: [{ text: JSON.stringify(m) }],
               status: 'success',
             },
           });
         } else if (name === 'live_read_email') {
-          const result = await execReadEmail(inp);
+          const result = JSON.stringify(
+            await liveReadEmailTool({ id: String(inp['id'] ?? '') })
+          );
           toolResults.push({
             toolResult: { toolUseId: toolUseId ?? '', content: [{ text: result }], status: 'success' },
           });
         } else if (name === 'live_search_inbox') {
-          const result = await execSearchInbox(inp);
+          const result = JSON.stringify(
+            await liveSearchInboxTool({
+              query: String(inp['query'] ?? ''),
+              max: Number(inp['max']) || undefined,
+            })
+          );
           toolResults.push({
             toolResult: { toolUseId: toolUseId ?? '', content: [{ text: result }], status: 'success' },
           });
@@ -818,6 +910,16 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
   // model to emit submit_analysis directly.
   if (!analysis) {
     console.warn('Model did not call submit_analysis. Forcing final submission.');
+    // Include the seed text so the model has data to populate the arrays —
+    // without it the forced call returns empty arrays for every section.
+    const seedText = seed.length === 0
+      ? '(No messages in seed.)'
+      : seed
+          .map(
+            (m, i) =>
+              `[${i + 1}] id=${m.id} | ${m.date} | from: ${m.from} | subject: ${m.subject}\n     snippet: ${m.snippet.slice(0, 200)}`
+          )
+          .join('\n');
     const draftSummary = lastTextResponse
       ? `\n\nThe model wrote this draft text but did not finalize: "${lastTextResponse.slice(0, 1500)}"`
       : '';
@@ -826,7 +928,7 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
         role: 'user',
         content: [
           {
-            text: `Submit your final daily inbox analysis NOW for the last ${days} days of email. Use the cache_query tool data already implied by the seed below or provide your best inference. Use empty arrays for sections you cannot populate. Call submit_analysis exactly once.${draftSummary}\n\nSeed message count: ${seed.length}.`,
+            text: `You MUST call submit_analysis NOW. Do not call any other tool.\n\nHere is the seed data for the last ${days} days (${seed.length} messages):\n\n${seedText}\n\nUsing this seed, populate ALL sections — vendors, invoices, followUpsNeeded, customerInquiries, events, topSenders. Do NOT leave invoices, followUpsNeeded, or customerInquiries empty if the seed contains relevant signals. Call submit_analysis exactly once.${draftSummary}`,
           },
         ],
       },
@@ -841,7 +943,8 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
             tools: ANALYZE_TOOLS,
             toolChoice: { tool: { name: 'submit_analysis' } },
           },
-          inferenceConfig: { maxTokens: 4096, temperature: 0.2 },
+          inferenceConfig: { maxTokens: 6144, temperature: 0.2 },
+          additionalModelRequestFields: BEDROCK_BETA_FIELDS,
         })
       );
       const finalContent = finalResponse.output?.message?.content ?? [];
@@ -898,6 +1001,37 @@ async function runAnalyze(days: number): Promise<CachedAnalysis> {
   // frontend can use Gmail's #all/<threadId> deep-link URL pattern (which
   // actually works), instead of #inbox/<messageId> (which lands on Inbox).
   await annotateAnalysisWithThreadIds(safe);
+
+  // Back-fill sourceAccount on each output item so the UI can show which
+  // inbox each follow-up / invoice / event came from. We build a lookup
+  // from the seed (which already carries sourceAccount from the cache).
+  const msgToAccount = new Map<string, string>();
+  for (const m of seed) {
+    if (m.sourceAccount && m.sourceAccount !== 'flowermound') {
+      msgToAccount.set(m.id, m.sourceAccount);
+    }
+  }
+  if (msgToAccount.size > 0) {
+    const pickAccount = (ids: string[]): string | undefined => {
+      for (const id of ids) {
+        const acct = msgToAccount.get(id);
+        if (acct) return acct;
+      }
+      return undefined;
+    };
+    for (const f of safe.followUpsNeeded) {
+      const acct = pickAccount(f.sourceMessageIds ?? []);
+      if (acct) (f as GmailFollowUp).sourceAccount = acct;
+    }
+    for (const inv of safe.invoices) {
+      const acct = pickAccount(inv.sourceMessageId ? [inv.sourceMessageId] : []);
+      if (acct) (inv as GmailInvoice).sourceAccount = acct;
+    }
+    for (const ev of safe.events) {
+      const acct = pickAccount(ev.sourceMessageIds ?? []);
+      if (acct) (ev as GmailEvent).sourceAccount = acct;
+    }
+  }
 
   await saveCachedAnalysis(safe);
   return safe;
@@ -1242,8 +1376,14 @@ Guidelines:
 - Quote subject lines and senders, but paraphrase email bodies — do not paste large blocks of email text.
 - Be concise. The owner wants the answer, not a transcript.
 - If the cache returns nothing AND coverage spans the date range, say "I checked the inbox and didn't find anything matching" rather than escalating to live search.
-- Always cite source message IDs as inline references like "(msg 18a3f...)" so the owner can find the thread.
-- If asked something unrelated to the inbox, say you can only answer questions grounded in their email.`;
+- Always cite source message IDs as inline references like "(msg 18a3f...)" — the app will automatically render these as clickable Gmail links. Do NOT write out full https://mail.google.com URLs — use the (msg XXXX) format instead.
+
+Cross-agent calling (IMPORTANT):
+- When a question requires POS/sales/inventory/staff data that the inbox cannot answer, use call_sales_assistant.
+- ALWAYS tell the user first: "Let me check with the Sales Assistant for that…" before calling the tool.
+- Examples that should use call_sales_assistant: "what were our sales last week?", "which brands are selling best?", "how much did we sell in orthotics?", "what's our current inventory?", "how is Becky performing?"
+- Do NOT use call_sales_assistant for inbox/email questions — use the cache tools instead.
+- If asked something unrelated to both inbox and POS data, say so clearly.`;
 }
 
 interface ChatMessageInput {
@@ -1271,7 +1411,8 @@ async function runChat(rawMessages: ChatMessageInput[]): Promise<string> {
         system: [{ text: buildChatSystemPrompt() }],
         messages: bedrockMessages,
         toolConfig: { tools: CHAT_TOOLS },
-        inferenceConfig: { maxTokens: 1500, temperature: 0.3 },
+        inferenceConfig: { maxTokens: 4096, temperature: 0.3 },
+        additionalModelRequestFields: BEDROCK_BETA_FIELDS,
       })
     );
 
@@ -1305,42 +1446,75 @@ async function runChat(rawMessages: ChatMessageInput[]): Promise<string> {
           let result: string;
           try {
             switch (name) {
+              case 'call_sales_assistant': {
+                const question = String(inp['question'] ?? '').trim();
+                if (!question) { result = JSON.stringify({ error: 'question is required' }); break; }
+                try {
+                  const payload = JSON.stringify({ messages: [{ role: 'user', content: question }] });
+                  const res = await lambdaClient.send(new InvokeCommand({
+                    FunctionName: SALES_CHAT_FN,
+                    InvocationType: 'RequestResponse',
+                    Payload: Buffer.from(JSON.stringify({
+                      routeKey: 'POST /pos/chat',
+                      body: payload,
+                      requestContext: { authorizer: { jwt: { claims: { sub: OWNER_USER_ID } } } },
+                    })),
+                  }));
+                  const raw = res.Payload ? Buffer.from(res.Payload).toString('utf-8') : '{}';
+                  const parsed = JSON.parse(raw) as { statusCode?: number; body?: string };
+                  const body = parsed.body ? JSON.parse(parsed.body) as { reply?: string } : {};
+                  result = JSON.stringify({ reply: body.reply ?? 'No response from Sales Assistant.' });
+                } catch (err) {
+                  result = JSON.stringify({ error: `Sales Assistant call failed: ${(err as Error).message}` });
+                }
+                break;
+              }
               case 'cache_query': {
-                const q = await cacheQuery(inp as CachedQueryArgs);
+                const q = await cacheQueryTool(inp as CachedQueryArgs);
                 result = JSON.stringify(q);
                 break;
               }
               case 'cache_read': {
-                const id = String(inp['id'] ?? '');
-                const dateOnly = String(inp['dateOnly'] ?? '') || undefined;
-                const m = await cacheRead(id, dateOnly);
-                result = JSON.stringify(m ?? { error: `Message ${id} not in cache` });
+                const m = await cacheReadTool({
+                  id: String(inp['id'] ?? ''),
+                  dateOnly: inp['dateOnly'] ? String(inp['dateOnly']) : undefined,
+                });
+                result = JSON.stringify(m);
                 break;
               }
               case 'cache_vendor_activity': {
-                const vendor = String(inp['vendor'] ?? '');
-                const days = Math.min(Number(inp['days']) || 90, 365);
-                const v = await cacheVendorActivity(vendor, days);
+                const v = await cacheVendorActivityTool({
+                  vendor: String(inp['vendor'] ?? ''),
+                  days: Number(inp['days']) || undefined,
+                });
                 result = JSON.stringify(v);
                 break;
               }
               case 'cache_stats': {
-                const s = await cacheStats();
+                const s = await cacheStatsTool();
                 result = JSON.stringify(s);
                 break;
               }
               case 'kb_semantic_search': {
-                const q = String(inp['query'] ?? '');
-                const topK = Math.min(Number(inp['top_k']) || 8, 25);
-                const hits = await vectorKbSearch(q, topK);
-                result = JSON.stringify({ query: q, count: hits.length, hits });
+                const r = await kbSemanticSearchTool({
+                  query: String(inp['query'] ?? ''),
+                  top_k: Number(inp['top_k']) || undefined,
+                });
+                result = JSON.stringify(r);
                 break;
               }
               case 'live_search_inbox':
-                result = await execSearchInbox(inp);
+                result = JSON.stringify(
+                  await liveSearchInboxTool({
+                    query: String(inp['query'] ?? ''),
+                    max: Number(inp['max']) || undefined,
+                  })
+                );
                 break;
               case 'live_read_email':
-                result = await execReadEmail(inp);
+                result = JSON.stringify(
+                  await liveReadEmailTool({ id: String(inp['id'] ?? '') })
+                );
                 break;
               default:
                 result = JSON.stringify({ error: `unknown tool ${name}` });
@@ -1617,6 +1791,7 @@ async function runDailyHighlights(): Promise<CachedHighlights> {
         messages,
         toolConfig: { tools: HIGHLIGHTS_TOOLS },
         inferenceConfig: { maxTokens: 3000, temperature: 0.2 },
+        additionalModelRequestFields: BEDROCK_BETA_FIELDS,
       })
     );
     const assistantContent = response.output?.message?.content ?? [];
@@ -1752,6 +1927,7 @@ async function runDailyHighlights(): Promise<CachedHighlights> {
             toolChoice: { tool: { name: 'submit_highlights' } },
           },
           inferenceConfig: { maxTokens: 3000, temperature: 0.2 },
+          additionalModelRequestFields: BEDROCK_BETA_FIELDS,
         })
       );
       const finalContent = r.output?.message?.content ?? [];
@@ -2080,6 +2256,7 @@ Find the account number Foot Solutions has with ${vendorName} and call submit_ac
         toolChoice: { tool: { name: 'submit_account_number' } },
       },
       inferenceConfig: { maxTokens: 400, temperature: 0 },
+      additionalModelRequestFields: BEDROCK_BETA_FIELDS,
     })
   );
 
@@ -2206,6 +2383,11 @@ export const handler = async (
           },
         })
       );
+      // Reset the dismissed-IDs row — the index-based keys from the
+      // previous analysis don't apply to the new one.
+      if (fresh.generatedAt) {
+        await resetDismissed(fresh.generatedAt);
+      }
       return { ok: true };
     } catch (err) {
       console.error('async analyze error:', (err as Error).message, (err as Error).stack);
@@ -2250,7 +2432,19 @@ export const handler = async (
         cached.generatedAt &&
         Date.now() - new Date(cached.generatedAt).getTime() < ANALYSIS_CACHE_TTL_MS
       ) {
-        return json(200, { ...cached, status: 'ready', fromCache: true });
+        const dismissed = await readDismissed();
+        const scoped =
+          dismissed.analysisGeneratedAt &&
+          dismissed.analysisGeneratedAt === cached.generatedAt
+            ? dismissed
+            : { followUpIds: [], invoiceIds: [] };
+        return json(200, {
+          ...cached,
+          status: 'ready',
+          fromCache: true,
+          dismissedFollowUpIds: scoped.followUpIds,
+          dismissedInvoiceIds: scoped.invoiceIds,
+        });
       }
 
       // Already running? Don't kick off a duplicate.
@@ -2298,9 +2492,22 @@ export const handler = async (
       }
       const status =
         (cached as Partial<CachedAnalysis> & { status?: string }).status ?? 'ready';
+      const dismissed = await readDismissed();
+      const scoped =
+        dismissed.analysisGeneratedAt &&
+        cached.generatedAt &&
+        dismissed.analysisGeneratedAt === cached.generatedAt
+          ? dismissed
+          : { followUpIds: [], invoiceIds: [] };
       // If we have a usable analysis, return it regardless of status so the
       // UI can show last-good while a new run is in flight.
-      return json(200, { ...cached, status, fromCache: true });
+      return json(200, {
+        ...cached,
+        status,
+        fromCache: true,
+        dismissedFollowUpIds: scoped.followUpIds,
+        dismissedInvoiceIds: scoped.invoiceIds,
+      });
     }
 
     if (route === 'POST /gmail/discover-vendor-accounts') {
@@ -2335,6 +2542,68 @@ export const handler = async (
     if (route === 'GET /gmail/cache-stats') {
       const stats = await cacheStats();
       return json(200, stats);
+    }
+
+    // ── POST /gmail/follow-up/verify ─────────────────────────────────
+    // Soft real-time check that a follow-up OR invoice the user is
+    // trying to clear has actually been resolved. Set `kind: "invoice"`
+    // in the body to invoke the invoice-closure prompt; defaults to
+    // "follow-up". Returns a verdict (resolved / unresolved /
+    // inconclusive) plus a reason. See verifyFollowUp.ts for cost
+    // analysis and the short-circuit / model-pick logic.
+    if (route === 'POST /gmail/follow-up/verify') {
+      let body: Partial<VerifyFollowUpInput> = {};
+      try {
+        body = JSON.parse(apiEvent.body ?? '{}');
+      } catch {
+        return json(400, { error: 'Invalid JSON body' });
+      }
+      if (!body.followUpId || typeof body.followUpId !== 'string') {
+        return json(400, { error: 'followUpId is required' });
+      }
+      if (!body.title || typeof body.title !== 'string') {
+        return json(400, { error: 'title is required' });
+      }
+      const sourceMessageIds = Array.isArray(body.sourceMessageIds)
+        ? body.sourceMessageIds.filter((s): s is string => typeof s === 'string')
+        : [];
+      const sourceThreadIds = Array.isArray(body.sourceThreadIds)
+        ? body.sourceThreadIds.filter((s): s is string => typeof s === 'string')
+        : [];
+      const kind = body.kind === 'invoice' ? 'invoice' : 'follow-up';
+      const ctx = body.invoiceContext;
+      const invoiceContext =
+        kind === 'invoice' && ctx && typeof ctx === 'object'
+          ? {
+              vendor: typeof ctx.vendor === 'string' ? ctx.vendor : undefined,
+              amount:
+                typeof ctx.amount === 'number'
+                  ? ctx.amount
+                  : ctx.amount === null
+                    ? null
+                    : undefined,
+              dueDate:
+                typeof ctx.dueDate === 'string'
+                  ? ctx.dueDate
+                  : ctx.dueDate === null
+                    ? null
+                    : undefined,
+            }
+          : undefined;
+      const verdict = await verifyFollowUp({
+        followUpId: body.followUpId,
+        kind,
+        title: body.title,
+        why: typeof body.why === 'string' ? body.why : '',
+        sourceMessageIds,
+        sourceThreadIds,
+        analysisGeneratedAt:
+          typeof body.analysisGeneratedAt === 'string'
+            ? body.analysisGeneratedAt
+            : undefined,
+        invoiceContext,
+      });
+      return json(200, verdict);
     }
 
     if (route === 'POST /pos/daily-highlights') {
@@ -2390,6 +2659,31 @@ export const handler = async (
         return json(404, { status: 'none', error: 'No highlights yet.' });
       }
       return json(200, { ...cached, status: cached.status ?? 'ready', fromCache: true });
+    }
+
+    // ── GET /gmail/attachment?messageId=X&attachmentId=Y ─────────────
+    // Fetches attachment bytes from the Gmail API and returns them as
+    // base64url-encoded data. The frontend decodes and triggers a download.
+    // We don't cache attachment bytes — they're fetched on demand.
+    if (route === 'GET /gmail/attachment') {
+      const messageId = apiEvent.queryStringParameters?.['messageId'];
+      const attachmentId = apiEvent.queryStringParameters?.['attachmentId'];
+      const filename = apiEvent.queryStringParameters?.['filename'] ?? 'attachment';
+      if (!messageId || !attachmentId) {
+        return json(400, { error: 'messageId and attachmentId are required' });
+      }
+      // Reject synthetic inline: IDs we set for small attachments
+      if (attachmentId.startsWith('inline:')) {
+        return json(400, { error: 'Inline attachments are embedded in the message body' });
+      }
+      const data = await getAttachment(messageId, attachmentId);
+      return json(200, {
+        messageId,
+        attachmentId,
+        filename,
+        data: data.data,   // base64url string
+        size: data.size,
+      });
     }
 
     return json(404, { error: `Unknown route ${route}` });

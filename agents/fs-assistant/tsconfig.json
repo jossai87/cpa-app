@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "declaration": false,
+    "sourceMap": false,
+    "noUncheckedIndexedAccess": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "../../lambda/shared/**/*.ts",
+    "../../lambda/chat/helpers.ts",
+    "../../lambda/chat/tools/**/*.ts",
+    "../../lambda/gmail-analysis/cache.ts",
+    "../../lambda/gmail-analysis/tools/**/*.ts",
+    "../../lambda/gmail/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

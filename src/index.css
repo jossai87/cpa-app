@@ -102,3 +102,14 @@
   from { opacity: 0; transform: translateY(4px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Action Items drawer — heartbeat animation ──────────────────────
+   Plays when a new item is saved. Two quick "thumps" like a heartbeat. */
+@keyframes heartbeat {
+  0%   { transform: scale(1); }
+  14%  { transform: scale(1.25); }
+  28%  { transform: scale(1); }
+  42%  { transform: scale(1.18); }
+  70%  { transform: scale(1); }
+  100% { transform: scale(1); }
+}

@@ -7,12 +7,12 @@ import type { TaxSession } from '../types';
 
 interface TaxHistoryListProps {
   onSelectSession: (session: TaxSession) => void;
-  /** Optional — invoked after a session was deleted. Useful for clearing
-   *  the active result if the deleted session was the one shown. */
+  /** Optional — invoked after a session was deleted. */
   onSessionDeleted?: (sessionId: string) => void;
-  /** Optional — invoked when the user clicks the reload button on a row.
-   *  The full session (with inputData) will be passed back. */
+  /** Optional — invoked when the user clicks the reload button on a row. */
   onReloadSession?: (session: TaxSession) => void;
+  /** Optional — highlights the currently selected session row. */
+  selectedSessionId?: string;
 }
 
 function useTaxHistory() {
@@ -57,6 +57,7 @@ export default function TaxHistoryList({
   onSelectSession,
   onSessionDeleted,
   onReloadSession,
+  selectedSessionId,
 }: TaxHistoryListProps) {
   const { data: sessions, isLoading, isError } = useTaxHistory();
   const deleteMut = useDeleteTaxSession();
@@ -175,10 +176,13 @@ export default function TaxHistoryList({
                 tabIndex={0}
                 role="button"
                 aria-label={`View session: ${session.taxYear} ${session.entityType}`}
+                aria-pressed={selectedSessionId === session.sessionId}
                 className={`group transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
                   isPendingDelete
                     ? 'bg-amber-50'
-                    : 'hover:bg-slate-50 cursor-pointer'
+                    : selectedSessionId === session.sessionId
+                      ? 'bg-blue-50 border-l-2 border-l-blue-500'
+                      : 'hover:bg-slate-50 cursor-pointer'
                 }`}
               >
                 <td className="px-4 py-3 font-medium text-slate-900">{session.taxYear}</td>

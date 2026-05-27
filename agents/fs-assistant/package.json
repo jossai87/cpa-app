@@ -1,0 +1,29 @@
+{
+  "name": "fs-assistant",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Unified FS Assistant — Strands TS orchestrator + Sales/Inbox sub-agents on Bedrock AgentCore Runtime",
+  "scripts": {
+    "build": "tsc && echo '{\"type\":\"commonjs\"}' > dist/lambda/package.json",
+    "start": "node dist/agents/fs-assistant/src/server.js",
+    "dev": "tsc && node dist/agents/fs-assistant/src/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-agentcore": "^3.700.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-lambda": "^3.600.0",
+    "@aws-sdk/client-s3vectors": "^3.1048.0",
+    "@aws-sdk/client-secrets-manager": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@strands-agents/sdk": "latest",
+    "express": "^5.1.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

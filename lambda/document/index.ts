@@ -74,6 +74,8 @@ const ALLOWED_CONTENT_TYPES = [
   'application/msword',
   'image/png',
   'image/jpeg',
+  'application/zip',
+  'application/x-zip-compressed', // some browsers send this for .zip
 ];
 
 function inferContentType(fileName: string): string {
@@ -96,6 +98,8 @@ function inferContentType(fileName: string): string {
     case 'jpg':
     case 'jpeg':
       return 'image/jpeg';
+    case 'zip':
+      return 'application/zip';
     default:
       return 'application/octet-stream';
   }
@@ -143,7 +147,7 @@ async function handleUploadUrl(
 
   if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
     return json(400, {
-      error: `Unsupported file type. Allowed: PDF, CSV, XLSX, PNG, JPEG`,
+      error: `Unsupported file type. Allowed: PDF, CSV, XLSX, XLS, DOCX, DOC, PNG, JPEG, ZIP`,
     });
   }
 
